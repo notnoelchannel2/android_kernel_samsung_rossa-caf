@@ -507,7 +507,7 @@ static int mdss_mdp_put_img(struct mdss_mdp_img_data *data)
 		pr_debug("pmem buf=0x%pa\n", &data->addr);
 		data->srcp_file = NULL;
 	} else if (!IS_ERR_OR_NULL(data->srcp_ihdl)) {
-		pr_debug("ion hdl=%p buf=0x%pa\n", data->srcp_ihdl,
+		pr_debug("ion hdl=%pK buf=0x%pa\n", data->srcp_ihdl,
 							&data->addr);
 		if (!iclient) {
 			pr_err("invalid ion client\n");
@@ -599,7 +599,7 @@ static int mdss_mdp_get_img(struct msmfb_data *img,
 		data->addr += data->offset;
 		data->len -= data->offset;
 
-		pr_debug("mem=%d ihdl=%p buf=0x%pa len=0x%lu\n", img->memory_id,
+		pr_debug("mem=%d ihdl=%pK buf=0x%pa len=0x%lu\n", img->memory_id,
 			 data->srcp_ihdl, &data->addr, data->len);
 	} else {
 		mdss_mdp_put_img(data);
@@ -652,7 +652,7 @@ static int mdss_mdp_map_buffer(struct mdss_mdp_img_data *data)
 		data->addr += data->offset;
 		data->len -= data->offset;
 
-		pr_debug("ihdl=%p buf=0x%pa len=0x%lu\n",
+		pr_debug("ihdl=%pK buf=0x%pa len=0x%lu\n",
 			 data->srcp_ihdl, &data->addr, data->len);
 	} else {
 		mdss_mdp_put_img(data);
@@ -714,10 +714,9 @@ void mdss_mdp_data_free(struct mdss_mdp_data *data)
 {
 	int i;
 
-	mdss_iommu_ctrl(1);
 	for (i = 0; i < data->num_planes && data->p[i].len; i++)
 		mdss_mdp_put_img(&data->p[i]);
-	mdss_iommu_ctrl(0);
+
 	data->num_planes = 0;
 }
 

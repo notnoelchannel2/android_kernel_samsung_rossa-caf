@@ -122,16 +122,20 @@ static int hbtp_input_create_input_dev(struct hbtp_input_absinfo *absinfo)
 	__set_bit(BTN_TOUCH, input_dev->keybit);
 	__set_bit(INPUT_PROP_DIRECT, input_dev->propbit);
 
-	for (i = KEY_HOME; i <= KEY_MICMUTE; i++)
+	for (i = KEY_ESC; i <= KEY_MICMUTE; i++)
 		__set_bit(i, input_dev->keybit);
 
 	/* For multi touch */
 	input_mt_init_slots(input_dev, HBTP_MAX_FINGER, 0);
 	for (i = 0; i <= ABS_MT_LAST - ABS_MT_FIRST; i++) {
 		abs = absinfo + i;
-		if (abs->active)
-			input_set_abs_params(input_dev, abs->code,
+		if (abs->active) {
+			if (abs->code >= 0 && abs->code < ABS_CNT)
+				input_set_abs_params(input_dev, abs->code,
 					abs->minimum, abs->maximum, 0, 0);
+			else
+				pr_err("%s: ABS code out of bound\n", __func__);
+		}
 	}
 
 	error = input_register_device(input_dev);

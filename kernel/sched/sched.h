@@ -497,14 +497,9 @@ struct rq {
 	int capacity;
 	int max_possible_capacity;
 	u64 window_start;
-	int prefer_idle;
 	u32 mostly_idle_load;
 	int mostly_idle_nr_run;
 	int mostly_idle_freq;
-
-	u64 cur_irqload;
-	u64 avg_irqload;
-	u64 irqload_ts;
 
 #ifdef CONFIG_SCHED_FREQ_INPUT
 	unsigned int old_busy_time;
@@ -735,12 +730,6 @@ u64 scale_load_to_cpu(u64 load, int cpu);
 unsigned int max_task_load(void);
 extern void sched_account_irqtime(int cpu, struct task_struct *curr,
 				 u64 delta, u64 wallclock);
-unsigned int cpu_temp(int cpu);
-
-static inline int capacity(struct rq *rq)
-{
-	return rq->capacity;
-}
 
 static inline void
 inc_cumulative_runnable_avg(struct rq *rq, struct task_struct *p)
@@ -769,39 +758,9 @@ dec_cumulative_runnable_avg(struct rq *rq, struct task_struct *p)
 #define real_to_pct(tunable)	\
 		(div64_u64((u64)tunable * (u64)100, (u64)max_task_load()))
 
-#define SCHED_HIGH_IRQ_TIMEOUT 3
-static inline u64 sched_irqload(int cpu)
-{
-	struct rq *rq = cpu_rq(cpu);
-	s64 delta;
-
-	delta = get_jiffies_64() - rq->irqload_ts;
-	/*
-	 * Current context can be preempted by irq and rq->irqload_ts can be
-	 * updated by irq context so that delta can be negative.
-	 * But this is okay and we can safely return as this means there
-	 * was recent irq occurrence.
-	 */
-
-	if (delta < SCHED_HIGH_IRQ_TIMEOUT)
-		return rq->avg_irqload;
-	else
-		return 0;
-}
-
-static inline int sched_cpu_high_irqload(int cpu)
-{
-	return sched_irqload(cpu) >= sysctl_sched_cpu_high_irqload;
-}
-
 #else	/* CONFIG_SCHED_HMP */
 
 static inline int pct_task_load(struct task_struct *p) { return 0; }
-
-static inline int capacity(struct rq *rq)
-{
-	return SCHED_LOAD_SCALE;
-}
 
 static inline void
 inc_cumulative_runnable_avg(struct rq *rq, struct task_struct *p)
@@ -827,8 +786,6 @@ static inline void sched_account_irqtime(int cpu, struct task_struct *curr,
 				 u64 delta, u64 wallclock)
 {
 }
-
-static inline int sched_cpu_high_irqload(int cpu) { return 0; }
 
 #endif	/* CONFIG_SCHED_HMP */
 
@@ -887,6 +844,7 @@ static inline void clear_reserved(int cpu)
 }
 
 extern unsigned int sched_enable_hmp;
+extern unsigned int sched_enable_power_aware;
 
 int mostly_idle_cpu(int cpu);
 extern void check_for_migration(struct rq *rq, struct task_struct *p);
@@ -898,7 +856,6 @@ extern void set_hmp_defaults(void);
 extern unsigned int power_cost_at_freq(int cpu, unsigned int freq);
 extern void reset_all_window_stats(u64 window_start, unsigned int window_size);
 extern void boost_kick(int cpu);
-extern int sched_boost(void);
 
 #else /* CONFIG_SCHED_HMP */
 

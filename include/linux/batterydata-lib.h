@@ -140,12 +140,6 @@ struct bms_battery_data {
 	const char		*battery_type;
 };
 
-#define is_between(left, right, value) \
-		(((left) >= (right) && (left) >= (value) \
-			&& (value) >= (right)) \
-		|| ((left) <= (right) && (left) <= (value) \
-			&& (value) <= (right)))
-
 #if defined(CONFIG_PM8921_BMS) || \
 	defined(CONFIG_PM8921_BMS_MODULE) || \
 	defined(CONFIG_QPNP_BMS) || \
@@ -169,6 +163,7 @@ int interpolate_slope(struct pc_temp_ocv_lut *pc_temp_ocv,
 int interpolate_acc(struct ibat_temp_acc_lut *ibat_acc_lut,
 					int batt_temp, int ibat);
 int linear_interpolate(int y0, int x0, int y1, int x1, int x);
+int is_between(int left, int right, int value);
 #else
 static inline int interpolate_fcc(struct single_row_lut *fcc_temp_lut,
 			int batt_temp)
@@ -201,6 +196,10 @@ static inline int interpolate_slope(struct pc_temp_ocv_lut *pc_temp_ocv,
 	return -EINVAL;
 }
 static inline int linear_interpolate(int y0, int x0, int y1, int x1, int x)
+{
+	return -EINVAL;
+}
+static inline int is_between(int left, int right, int value)
 {
 	return -EINVAL;
 }

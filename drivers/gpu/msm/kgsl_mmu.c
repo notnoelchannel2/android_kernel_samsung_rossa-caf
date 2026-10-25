@@ -700,7 +700,12 @@ kgsl_mmu_get_gpuaddr(struct kgsl_pagetable *pagetable,
 	/* Add space for the guard page when allocating the mmu VA. */
 	size = memdesc->size;
 	if (kgsl_memdesc_has_guard_page(memdesc))
-		size += kgsl_memdesc_guard_page_size(memdesc);
+		size += PAGE_SIZE;
+
+	if (size < memdesc->size) {
+		memdesc->size = 0;
+		return -EINVAL;
+	}
 
 	/*
 	 * Allocate aligned virtual addresses for iommu. This allows
@@ -709,8 +714,19 @@ kgsl_mmu_get_gpuaddr(struct kgsl_pagetable *pagetable,
 	 */
 
 	if (kgsl_memdesc_use_cpu_map(memdesc)) {
+		uint64_t end = memdesc->gpuaddr + size;
 		if (memdesc->gpuaddr == 0)
 			return -EINVAL;
+
+		/*
+		 * Validate the GPU address range for memory mapping request
+		 * for user allocated buffers before setting the bitmap.
+		 */
+		if ((end >= (KGSL_MMU_GLOBAL_MEM_BASE - SZ_1M)) ||
+				(end <  memdesc->gpuaddr)) {
+			memdesc->gpuaddr = 0;
+			return -EINVAL;
+		}
 		bitmap_set(pagetable->mem_bitmap,
 			(int) (memdesc->gpuaddr >> PAGE_SHIFT),
 			(int) (size >> PAGE_SHIFT));
@@ -777,7 +793,7 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 	/* Add space for the guard page when allocating the mmu VA. */
 	size = memdesc->size;
 	if (kgsl_memdesc_has_guard_page(memdesc))
-		size += kgsl_memdesc_guard_page_size(memdesc);
+		size += PAGE_SIZE;
 
 	if (KGSL_MMU_TYPE_IOMMU != kgsl_mmu_get_mmutype())
 		spin_lock(&pagetable->lock);
@@ -826,7 +842,7 @@ kgsl_mmu_put_gpuaddr(struct kgsl_pagetable *pagetable,
 	/* Add space for the guard page when freeing the mmu VA. */
 	size = memdesc->size;
 	if (kgsl_memdesc_has_guard_page(memdesc))
-		size += kgsl_memdesc_guard_page_size(memdesc);
+		size += PAGE_SIZE;
 
 	if (KGSL_MEMDESC_BITMAP_ALLOC & memdesc->priv) {
 		bitmap_clear(pagetable->mem_bitmap,
@@ -874,7 +890,7 @@ kgsl_mmu_unmap(struct kgsl_pagetable *pagetable,
 	/* Add space for the guard page when freeing the mmu VA. */
 	size = memdesc->size;
 	if (kgsl_memdesc_has_guard_page(memdesc))
-		size += kgsl_memdesc_guard_page_size(memdesc);
+		size += PAGE_SIZE;
 
 	start_addr = memdesc->gpuaddr;
 	end_addr = (memdesc->gpuaddr + size);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -791,17 +791,16 @@ int emac_hw_clear_sgmii_intr_status(struct emac_hw *hw, u32 irq_bits)
 		if (!(status & irq_bits))
 			break;
 	}
-
-	emac_reg_w32(hw, EMAC_SGMII_PHY, EMAC_SGMII_PHY_IRQ_CMD, 0);
-	emac_reg_w32(hw, EMAC_SGMII_PHY, EMAC_SGMII_PHY_INTERRUPT_CLEAR, 0);
-	wmb(); /* ensure the settings are flushed to HW */
-
 	if (status & irq_bits) {
 		emac_err(hw->adpt,
 			 "failed to clear SGMII irq: status 0x%x bits 0x%x\n",
 			 status, irq_bits);
 		return -EIO;
 	}
+
+	emac_reg_w32(hw, EMAC_SGMII_PHY, EMAC_SGMII_PHY_IRQ_CMD, 0);
+	emac_reg_w32(hw, EMAC_SGMII_PHY, EMAC_SGMII_PHY_INTERRUPT_CLEAR, 0);
+	wmb();
 
 	return 0;
 }
@@ -902,8 +901,8 @@ void emac_hw_enable_intr(struct emac_hw *hw)
 
 	if (adpt->tstamp_en)
 		emac_reg_w32(hw, EMAC_1588, EMAC_P1588_PTP_EXPANDED_INT_MASK,
-			     hw->ptp_expanded_intr_mask);
-	wmb(); /* ensure that irq and ptp setting are flushed to HW */
+			     hw->ptp_intr_mask);
+	wmb();
 }
 
 void emac_hw_disable_intr(struct emac_hw *hw)
@@ -1025,22 +1024,22 @@ void emac_hw_config_mac_ctrl(struct emac_hw *hw)
 
 	mac = emac_reg_r32(hw, EMAC, EMAC_MAC_CTRL);
 
-	if (TEST_FLAG(hw, HW_VLANSTRIP_EN))
+	if (CHK_HW_FLAG(VLANSTRIP_EN))
 		mac |= VLAN_STRIP;
 	else
 		mac &= ~VLAN_STRIP;
 
-	if (TEST_FLAG(hw, HW_PROMISC_EN))
+	if (CHK_HW_FLAG(PROMISC_EN))
 		mac |= PROM_MODE;
 	else
 		mac &= ~PROM_MODE;
 
-	if (TEST_FLAG(hw, HW_MULTIALL_EN))
+	if (CHK_HW_FLAG(MULTIALL_EN))
 		mac |= MULTI_ALL;
 	else
 		mac &= ~MULTI_ALL;
 
-	if (TEST_FLAG(hw, HW_LOOPBACK_EN))
+	if (CHK_HW_FLAG(LOOPBACK_EN))
 		mac |= MAC_LP_EN;
 	else
 		mac &= ~MAC_LP_EN;
@@ -1377,7 +1376,7 @@ void emac_hw_config_mac(struct emac_hw *hw)
 	emac_hw_config_rx_ctrl(hw);
 	emac_hw_config_dma_ctrl(hw);
 
-	if (TEST_FLAG(hw, HW_PTP_CAP))
+	if (CHK_HW_FLAG(PTP_CAP))
 		emac_ptp_config(hw);
 
 	val = emac_reg_r32(hw, EMAC, EMAC_AXI_MAST_CTRL);
@@ -1471,8 +1470,7 @@ void emac_hw_start_mac(struct emac_hw *hw)
 	mac |= (CRCE | PCRCE);
 	mac |= ((hw->preamble << PRLEN_SHFT) & PRLEN_BMSK);
 	mac |= BROAD_EN;
-	mac |= FLCHK;
-	mac &= ~RX_CHKSUM_EN;
+	mac |= (FLCHK | RX_CHKSUM_EN);
 	mac &= ~(HUGEN | VLAN_STRIP | TPAUSE | SIMR | HUGE | MULTI_ALL |
 		 DEBUG_MODE | SINGLE_PAUSE_MODE);
 
@@ -1487,7 +1485,7 @@ void emac_hw_start_mac(struct emac_hw *hw)
 		     (INT_RD_CLR_EN | LPW_MODE |
 		      IRQ_MODERATOR_EN | IRQ_MODERATOR2_EN));
 
-	if (TEST_FLAG(hw, HW_PTP_CAP))
+	if (CHK_HW_FLAG(PTP_CAP))
 		emac_ptp_set_linkspeed(hw, hw->link_speed);
 
 	emac_hw_config_mac_ctrl(hw);

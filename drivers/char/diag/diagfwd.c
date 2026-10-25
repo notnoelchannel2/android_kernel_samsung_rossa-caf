@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -119,6 +119,8 @@ int chk_config_get_id(void)
 		return MSM8992_TOOLS_ID;
 	case MSM_CPU_TELLURIUM:
 		return MSMTELLURIUM_TOOLS_ID;
+	case MSM_CPU_8929:
+		return MSM8929_TOOLS_ID;
 	default:
 		if (driver->use_device_tree) {
 			if (machine_is_msm8974())
@@ -1526,7 +1528,8 @@ static int diagfwd_mux_write_done(unsigned char *buf, int len, int buf_ctxt,
 			 * channels. This will ensure that the next read is not
 			 * missed.
 			 */
-			if (driver->logging_mode == MEMORY_DEVICE_MODE) {
+				if (driver->logging_mode == MEMORY_DEVICE_MODE &&
+						ctxt == DIAG_MEMORY_DEVICE_MODE) {
 				flush_workqueue(smd_info->wq);
 				wake_up(&driver->smd_wait_q);
 			}

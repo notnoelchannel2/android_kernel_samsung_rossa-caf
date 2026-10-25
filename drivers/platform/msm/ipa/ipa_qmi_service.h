@@ -24,7 +24,7 @@
  */
 #define IPA_A7_QMAP_HDR_NAME "ipa_qmap_hdr"
 #define IPA_DFLT_WAN_RT_TBL_NAME "ipa_dflt_wan_rt"
-#define MAX_NUM_Q6_RULE 35
+#define MAX_NUM_Q6_RULE 20
 #define DEV_NAME "ipa-wan"
 #define SUBSYS_MODEM "modem"
 
@@ -73,10 +73,6 @@ extern struct elem_info ipa_install_fltr_rule_req_msg_data_v01_ei[];
 extern struct elem_info ipa_install_fltr_rule_resp_msg_data_v01_ei[];
 extern struct elem_info ipa_fltr_installed_notif_req_msg_data_v01_ei[];
 extern struct elem_info ipa_fltr_installed_notif_resp_msg_data_v01_ei[];
-extern struct elem_info ipa_enable_force_clear_datapath_req_msg_data_v01_ei[];
-extern struct elem_info ipa_enable_force_clear_datapath_resp_msg_data_v01_ei[];
-extern struct elem_info ipa_disable_force_clear_datapath_req_msg_data_v01_ei[];
-extern struct elem_info ipa_disable_force_clear_datapath_resp_msg_data_v01_ei[];
 extern struct elem_info ipa_config_req_msg_data_v01_ei[];
 extern struct elem_info ipa_config_resp_msg_data_v01_ei[];
 

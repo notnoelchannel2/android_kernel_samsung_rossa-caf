@@ -20,7 +20,6 @@
 #include <linux/err.h>
 #include <linux/sysfs.h>
 #include <linux/mutex.h>
-#include <linux/of.h>
 #include <linux/of_coresight.h>
 #include <linux/coresight.h>
 #include "coresight-qmi.h"
@@ -44,7 +43,6 @@ struct modem_etm_drvdata {
 	struct work_struct		work_svc_exit;
 	struct work_struct		work_rcv_msg;
 	struct notifier_block		nb;
-	uint32_t			inst_id;
 };
 
 static int modem_etm_enable(struct coresight_device *csdev)
@@ -209,7 +207,7 @@ static void modem_etm_svc_arrive(struct work_struct *work)
 
 	if (qmi_connect_to_service(drvdata->handle, CORESIGHT_QMI_SVC_ID,
 				   CORESIGHT_QMI_VERSION,
-				   drvdata->inst_id) < 0) {
+				   CORESIGHT_SVC_INST_ID_MODEM_V01) < 0) {
 		dev_err(drvdata->dev,
 			"%s: Could not connect handle to service\n", __func__);
 		qmi_handle_destroy(drvdata->handle);
@@ -274,13 +272,6 @@ static int modem_etm_probe(struct platform_device *pdev)
 	if (!desc)
 		return -ENOMEM;
 
-	if (pdev->dev.of_node) {
-		ret = of_property_read_u32(pdev->dev.of_node, "qcom,inst-id",
-					   &drvdata->inst_id);
-		if (ret)
-			drvdata->inst_id = CORESIGHT_SVC_INST_ID_MODEM_V01;
-	}
-
 	mutex_init(&drvdata->mutex);
 
 	drvdata->nb.notifier_call = modem_etm_svc_event_notify;
@@ -293,7 +284,7 @@ static int modem_etm_probe(struct platform_device *pdev)
 	INIT_WORK(&drvdata->work_rcv_msg, modem_etm_rcv_msg);
 	ret = qmi_svc_event_notifier_register(CORESIGHT_QMI_SVC_ID,
 					      CORESIGHT_QMI_VERSION,
-					      drvdata->inst_id,
+					      CORESIGHT_SVC_INST_ID_MODEM_V01,
 					      &drvdata->nb);
 	if (ret < 0)
 		goto err0;
@@ -317,7 +308,7 @@ static int modem_etm_probe(struct platform_device *pdev)
 err1:
 	qmi_svc_event_notifier_unregister(CORESIGHT_QMI_SVC_ID,
 					  CORESIGHT_QMI_VERSION,
-					  drvdata->inst_id,
+					  CORESIGHT_SVC_INST_ID_MODEM_V01,
 					  &drvdata->nb);
 err0:
 	destroy_workqueue(drvdata->wq);

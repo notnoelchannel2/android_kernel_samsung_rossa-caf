@@ -193,7 +193,7 @@
 			<  345600  2526 >,
 			<  400000  2526 >,
 			<  800000  2526 >,
-			<  960000  5053 >,
+			<  960000  2526 >,
 			<  1113600 5053 >,
 			<  1344000 6079 >,
 			<  1497600 6079 >,
@@ -203,7 +203,7 @@
 			<  200000 1525 >,
 			<  249600 2526 >,
 			<  499200 2526 >,
-			<  800000 5053 >,
+			<  800000 2526 >,
 			<  998400 6079 >,
 			< 1113600 6079 >;
 		};
@@ -274,6 +274,11 @@
 		compatible = "arm,armv8-pmuv3";
 		qcom,irq-is-percpu;
 		interrupts = <1 7 0xff00>;
+	};
+
+	qcom,msm-thermal {
+		qcom,core-control-mask = <0xFF>;
+		qcom,freq-mitigation-control-mask = <0xFF>;
 	};
 
 	jtag_fuse: jtagfuse@5e01c {

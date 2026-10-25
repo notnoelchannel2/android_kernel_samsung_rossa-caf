@@ -41,10 +41,6 @@
 	{ KGSL_CONSTRAINT_PWR_MIN, "Min" }, \
 	{ KGSL_CONSTRAINT_PWR_MAX, "Max" }
 
-#define KGSL_PWR_ADD_LIMIT 0
-#define KGSL_PWR_DEL_LIMIT 1
-#define KGSL_PWR_SET_LIMIT 2
-
 /*
  * States for thermal cycling.  _DISABLE means that no cycling has been
  * requested.  _ENABLE means that cycling has been requested, but GPU
@@ -84,7 +80,6 @@ struct kgsl_pwr_constraint {
  * @power_flags - Control flags for power
  * @pwrlevels - List of supported power levels
  * @active_pwrlevel - The currently active power level
- * @previous_pwrlevel - The power level before transition
  * @thermal_pwrlevel - maximum powerlevel constraint from thermal
  * @default_pwrlevel - device wake up power level
  * @init_pwrlevel - device inital power level
@@ -103,20 +98,11 @@ struct kgsl_pwr_constraint {
  * @pm_qos_wakeup_latency - allowed CPU latency in microseconds during wakeup
  * @bus_control - true if the bus calculation is independent
  * @bus_mod - modifier from the current power level for the bus vote
- * @bus_percent_ab - current percent of total possible bus usage
  * @bus_index - default bus index into the bus_ib table
  * @bus_ib - the set of unique ib requests needed for the bus calculation
  * @constraint - currently active power constraint
  * @superfast - Boolean flag to indicate that the GPU start should be run in the
  * higher priority thread
- * @thermal_cycle_ws - Work struct for scheduling thermal cycling
- * @thermal_timer - Timer for thermal cycling
- * @thermal_timeout - Cycling timeout for switching between frequencies
- * @thermal_cycle - Is thermal cycling enabled
- * @thermal_highlow - flag for swithcing between high and low frequency
- * @limits - list head for limits
- * @limits_lock - spin lock to protect limits list
- * @sysfs_pwr_limit - pointer to the sysfs limits node
  */
 
 struct kgsl_pwrctrl {
@@ -126,7 +112,6 @@ struct kgsl_pwrctrl {
 	unsigned long ctrl_flags;
 	struct kgsl_pwrlevel pwrlevels[KGSL_MAX_PWRLEVELS];
 	unsigned int active_pwrlevel;
-	unsigned int previous_pwrlevel;
 	unsigned int thermal_pwrlevel;
 	unsigned int default_pwrlevel;
 	unsigned int init_pwrlevel;
@@ -146,7 +131,6 @@ struct kgsl_pwrctrl {
 	unsigned int pm_qos_wakeup_latency;
 	bool bus_control;
 	int bus_mod;
-	unsigned int bus_percent_ab;
 	struct device *devbw;
 	unsigned int bus_index[KGSL_MAX_PWRLEVELS];
 	uint64_t bus_ib[KGSL_MAX_PWRLEVELS];
@@ -157,9 +141,6 @@ struct kgsl_pwrctrl {
 	uint32_t thermal_timeout;
 	uint32_t thermal_cycle;
 	uint32_t thermal_highlow;
-	struct list_head limits;
-	spinlock_t limits_lock;
-	struct kgsl_pwr_limit *sysfs_pwr_limit;
 };
 
 void kgsl_pwrctrl_irq(struct kgsl_device *device, int state);

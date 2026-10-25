@@ -24,6 +24,7 @@
 #include <linux/delay.h>
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
+#include <linux/cpu_pm.h>
 #include <linux/msm-bus.h>
 #include <linux/uaccess.h>
 #include <linux/dma-mapping.h>
@@ -43,6 +44,10 @@
 #include "idle.h"
 #include "pm-boot.h"
 #include "../../../arch/arm/mach-msm/clock.h"
+
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/sec_debug.h>
+#endif
 
 #define SCM_CMD_TERMINATE_PC	(0x2)
 #define SCM_CMD_CORE_HOTPLUGGED (0x10)
@@ -79,7 +84,6 @@ enum msm_pc_count_offsets {
 
 static bool msm_pm_ldo_retention_enabled = true;
 static bool msm_pm_tz_flushes_cache;
-static bool msm_pm_ret_no_pll_switch;
 static bool msm_no_ramp_down_pc;
 static struct msm_pm_sleep_status_data *msm_pm_slp_sts;
 DEFINE_PER_CPU(struct clk *, cpu_clks);
@@ -137,8 +141,7 @@ static bool msm_pm_retention(bool from_idle)
 	cpumask_set_cpu(cpu, &retention_cpus);
 	spin_unlock(&retention_lock);
 
-	if (!msm_pm_ret_no_pll_switch)
-		clk_disable(cpu_clk);
+	clk_disable(cpu_clk);
 
 	ret = msm_spm_set_low_power_mode(MSM_SPM_MODE_RETENTION, false);
 	WARN_ON(ret);
@@ -148,9 +151,8 @@ static bool msm_pm_retention(bool from_idle)
 	ret = msm_spm_set_low_power_mode(MSM_SPM_MODE_CLOCK_GATING, false);
 	WARN_ON(ret);
 
-	if (!msm_pm_ret_no_pll_switch)
-		if (clk_enable(cpu_clk))
-			pr_err("%s(): Error restore cpu clk\n", __func__);
+	if (clk_enable(cpu_clk))
+		pr_err("%s(): Error restore cpu clk\n", __func__);
 
 	spin_lock(&retention_lock);
 	cpumask_clear_cpu(cpu, &retention_cpus);
@@ -254,6 +256,9 @@ static bool __ref msm_pm_spm_power_collapse(
 		pr_info("CPU%u: %s: notify_rpm %d\n",
 			cpu, __func__, (int) notify_rpm);
 
+	if (from_idle)
+		cpu_pm_enter();
+
 	ret = msm_spm_set_low_power_mode(
 			MSM_SPM_MODE_POWER_COLLAPSE, notify_rpm);
 	WARN_ON(ret);
@@ -267,6 +272,9 @@ static bool __ref msm_pm_spm_power_collapse(
 			cpu, __func__, entry);
 
 	msm_jtag_save_state();
+#ifdef CONFIG_SEC_DEBUG
+	secdbg_sched_msg("+pc(I:%d,R:%d)", from_idle, notify_rpm);
+#endif
 
 #ifdef CONFIG_CPU_V7
 	collapsed = save_cpu_regs ?
@@ -276,12 +284,19 @@ static bool __ref msm_pm_spm_power_collapse(
 		!cpu_suspend(0) : msm_pm_pc_hotplug();
 #endif
 
+#ifdef CONFIG_SEC_DEBUG
+	secdbg_sched_msg("-pc(%d)", collapsed);
+#endif
+
 	msm_jtag_restore_state();
 
 	if (collapsed)
 		local_fiq_enable();
 
 	msm_pm_boot_config_after_pc(cpu);
+
+	if (from_idle)
+		cpu_pm_exit();
 
 	if (MSM_PM_DEBUG_POWER_COLLAPSE & msm_pm_debug_mask)
 		pr_info("CPU%u: %s: msm_pm_collapse returned, collapsed %d\n",
@@ -779,10 +794,6 @@ static int msm_pm_clk_init(struct platform_device *pdev)
 	char clk_name[] = "cpu??_clk";
 	char *key;
 
-	key = "qcom,saw-turns-off-pll";
-	if (of_property_read_bool(pdev->dev.of_node, key))
-		return 0;
-
 	key = "qcom,synced-clocks";
 	synced_clocks = of_property_read_bool(pdev->dev.of_node, key);
 
@@ -854,10 +865,6 @@ skip_save_imem:
 		msm_pm_tz_flushes_cache =
 				of_property_read_bool(pdev->dev.of_node, key);
 
-		key = "qcom,no-pll-switch-for-retention";
-		msm_pm_ret_no_pll_switch =
-				of_property_read_bool(pdev->dev.of_node, key);
-
 		ret = msm_pm_clk_init(pdev);
 		if (ret) {
 			pr_info("msm_pm_clk_init returned error\n");
@@ -893,15 +900,25 @@ static int __init msm_pm_drv_init(void)
 
 	rc = platform_driver_register(&msm_cpu_pm_snoc_client_driver);
 
-	if (rc) {
+	if (rc)
 		pr_err("%s(): failed to register driver %s\n", __func__,
 				msm_cpu_pm_snoc_client_driver.driver.name);
 		return rc;
-	}
-
-	return platform_driver_register(&msm_cpu_pm_driver);
 }
 late_initcall(msm_pm_drv_init);
+
+static int __init msm_pm_debug_counters_init(void)
+{
+	int rc;
+
+	rc = platform_driver_register(&msm_cpu_pm_driver);
+
+	if (rc)
+		pr_err("%s(): failed to register driver %s\n", __func__,
+				msm_cpu_pm_driver.driver.name);
+	return rc;
+}
+fs_initcall(msm_pm_debug_counters_init);
 
 int __init msm_pm_sleep_status_init(void)
 {

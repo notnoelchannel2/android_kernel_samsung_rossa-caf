@@ -417,7 +417,7 @@ static int msm_slim_post_tx_msgq(struct msm_slim_ctrl *dev, u8 *buf, int len)
 	return ret;
 }
 
-void msm_slim_tx_msg_return(struct msm_slim_ctrl *dev, int err)
+void msm_slim_tx_msg_return(struct msm_slim_ctrl *dev)
 {
 	struct msm_slim_endp *endpoint = &dev->tx_msgq;
 	struct sps_mem_buffer *mem = &endpoint->buf;
@@ -446,25 +446,6 @@ void msm_slim_tx_msg_return(struct msm_slim_ctrl *dev, int err)
 			struct completion *comp = dev->wr_comp[idx];
 			dev->wr_comp[idx] = NULL;
 			complete(comp);
-		} else if (idx >= MSM_TX_BUFS) {
-			SLIM_ERR(dev, "BUF out of bounds:base:0x%llx, io:0x%x",
-					(u64)mem->phys_base, iovec.addr);
-			/* print BAM debug info for TX pipe */
-			sps_get_bam_debug_info(dev->bam.hdl, 93,
-						SPS_BAM_PIPE(4), 0, 2);
-			continue;
-		}
-		if (err) {
-			int i;
-			u32 *addr = (u32 *)mem->base +
-					(idx * (SLIM_MSGQ_BUF_LEN >> 2));
-			/* print the descriptor that resulted in error */
-			for (i = 0; i < (SLIM_MSGQ_BUF_LEN >> 2); i++)
-				SLIM_WARN(dev, "err desc[%d]:0x%x", i, addr[i]);
-			/* print BAM debug info for TX pipe for invalid TX */
-			if (err == -EINVAL)
-				sps_get_bam_debug_info(dev->bam.hdl, 93,
-							SPS_BAM_PIPE(4), 0, 2);
 		}
 		/* reclaim all packets that were delivered out of order */
 		if (idx != dev->tx_head)
@@ -496,7 +477,7 @@ static u32 *msm_slim_modify_tx_buf(struct msm_slim_ctrl *dev,
 	return retbuf;
 }
 u32 *msm_slim_manage_tx_msgq(struct msm_slim_ctrl *dev, bool getbuf,
-					struct completion *comp, int err)
+					struct completion *comp)
 {
 	int ret = 0;
 	int retries = 0;
@@ -504,7 +485,7 @@ u32 *msm_slim_manage_tx_msgq(struct msm_slim_ctrl *dev, bool getbuf,
 
 	mutex_lock(&dev->tx_buf_lock);
 	if (!getbuf) {
-		msm_slim_tx_msg_return(dev, err);
+		msm_slim_tx_msg_return(dev);
 		mutex_unlock(&dev->tx_buf_lock);
 		return NULL;
 	}
@@ -516,7 +497,7 @@ u32 *msm_slim_manage_tx_msgq(struct msm_slim_ctrl *dev, bool getbuf,
 	}
 
 	do {
-		msm_slim_tx_msg_return(dev, err);
+		msm_slim_tx_msg_return(dev);
 		retbuf = msm_slim_modify_tx_buf(dev, comp);
 		if (!retbuf)
 			ret = -EAGAIN;
@@ -570,7 +551,7 @@ u32 *msm_get_msg_buf(struct msm_slim_ctrl *dev, int len,
 		return dev->tx_buf;
 	}
 
-	return msm_slim_manage_tx_msgq(dev, true, comp, 0);
+	return msm_slim_manage_tx_msgq(dev, true, comp);
 }
 
 static void
@@ -609,6 +590,7 @@ static void msm_slim_rx_msgq_cb(struct sps_event_notify *notify)
 static int msm_slim_post_rx_msgq(struct msm_slim_ctrl *dev, int ix)
 {
 	int ret;
+	u32 flags = SPS_IOVEC_FLAG_INT;
 	struct msm_slim_endp *endpoint = &dev->rx_msgq;
 	struct sps_mem_buffer *mem = &endpoint->buf;
 	struct sps_pipe *pipe = endpoint->sps;
@@ -619,7 +601,7 @@ static int msm_slim_post_rx_msgq(struct msm_slim_ctrl *dev, int ix)
 
 	pr_debug("index:%d, virt:0x%p\n", ix, virt_addr);
 
-	ret = sps_transfer_one(pipe, phys_addr, 4, virt_addr, 0);
+	ret = sps_transfer_one(pipe, phys_addr, 4, virt_addr, flags);
 	if (ret)
 		dev_err(dev->dev, "transfer_one() failed 0x%x, %d\n", ret, ix);
 
@@ -678,7 +660,7 @@ int msm_slim_connect_endp(struct msm_slim_ctrl *dev,
 
 	if (notify) {
 		sps_descr_event.mode = SPS_TRIGGER_CALLBACK;
-		sps_descr_event.options = SPS_O_EOT;
+		sps_descr_event.options = SPS_O_DESC_DONE;
 		sps_descr_event.user = (void *)dev;
 		sps_descr_event.xfer_done = notify;
 
@@ -719,12 +701,8 @@ int msm_slim_connect_endp(struct msm_slim_ctrl *dev,
 		}
 		dev->use_rx_msgqs = MSM_MSGQ_ENABLED;
 	} else {
-		mutex_lock(&dev->tx_buf_lock);
 		dev->tx_tail = 0;
 		dev->tx_head = 0;
-		for (i = 0; i < MSM_TX_BUFS; i++)
-			dev->wr_comp[i] = NULL;
-		mutex_unlock(&dev->tx_buf_lock);
 		dev->use_tx_msgqs = MSM_MSGQ_ENABLED;
 	}
 
@@ -766,7 +744,7 @@ static int msm_slim_init_rx_msgq(struct msm_slim_ctrl *dev, u32 pipe_reg)
 	config->source = dev->bam.hdl;
 	config->destination = SPS_DEV_HANDLE_MEM;
 	config->src_pipe_index = pipe_offset;
-	config->options = SPS_O_EOT | SPS_O_ERROR |
+	config->options = SPS_O_DESC_DONE | SPS_O_ERROR |
 				SPS_O_ACK_TRANSFERS | SPS_O_AUTO_ENABLE;
 
 	/* Allocate memory for the FIFO descriptors */

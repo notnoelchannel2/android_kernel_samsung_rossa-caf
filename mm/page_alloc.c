@@ -121,6 +121,18 @@ unsigned long total_unmovable_pages __read_mostly;
 int percpu_pagelist_fraction;
 gfp_t gfp_allowed_mask __read_mostly = GFP_BOOT_MASK;
 
+static unsigned int boot_mode = 0;
+static int __init setup_bootmode(char *str)
+{
+	if (get_option(&str, &boot_mode)) {
+		printk("%s: boot_mode is %u\n", __func__, boot_mode);
+		return 0;
+	}
+
+	return -EINVAL;
+}
+early_param("androidboot.boot_recovery", setup_bootmode);
+
 #ifdef CONFIG_PM_SLEEP
 /*
  * The following functions are used by the suspend/hibernate code to temporarily
@@ -183,9 +195,9 @@ int sysctl_lowmem_reserve_ratio[MAX_NR_ZONES-1] = {
 	 256,
 #endif
 #ifdef CONFIG_HIGHMEM
-	 32,
+	 96,
 #endif
-	 32,
+	 96,
 };
 
 EXPORT_SYMBOL(totalram_pages);
@@ -479,6 +491,29 @@ static inline void rmv_page_order(struct page *page)
 }
 
 /*
+ * Locate the struct page for both the matching buddy in our
+ * pair (buddy1) and the combined O(n+1) page they form (page).
+ *
+ * 1) Any buddy B1 will have an order O twin B2 which satisfies
+ * the following equation:
+ *     B2 = B1 ^ (1 << O)
+ * For example, if the starting buddy (buddy2) is #8 its order
+ * 1 buddy is #10:
+ *     B2 = 8 ^ (1 << 1) = 8 ^ 2 = 10
+ *
+ * 2) Any buddy B will have an order O+1 parent P which
+ * satisfies the following equation:
+ *     P = B & ~(1 << O)
+ *
+ * Assumption: *_mem_map is contiguous at least up to MAX_ORDER
+ */
+static inline unsigned long
+__find_buddy_index(unsigned long page_idx, unsigned int order)
+{
+	return page_idx ^ (1 << order);
+}
+
+/*
  * This function checks whether a page is free && is the buddy
  * we can do coalesce a page and its buddy if
  * (a) the buddy is not in a hole &&
@@ -544,7 +579,6 @@ static inline void __free_one_page(struct page *page,
 	unsigned long combined_idx;
 	unsigned long uninitialized_var(buddy_idx);
 	struct page *buddy = NULL;
-	int max_order = MAX_ORDER;
 
 	VM_BUG_ON(!zone_is_initialized(zone));
 
@@ -553,24 +587,15 @@ static inline void __free_one_page(struct page *page,
 			return;
 
 	VM_BUG_ON(migratetype == -1);
-	if (is_migrate_isolate(migratetype)) {
-		/*
-		 * We restrict max order of merging to prevent merge
-		 * between freepages on isolate pageblock and normal
-		 * pageblock. Without this, pageblock isolation
-		 * could cause incorrect freepage accounting.
-		 */
-		max_order = min(MAX_ORDER, pageblock_order + 1);
-	} else {
+	if (!is_migrate_isolate(migratetype))
 		__mod_zone_freepage_state(zone, 1 << order, migratetype);
-	}
 
-	page_idx = page_to_pfn(page) & ((1 << max_order) - 1);
+	page_idx = page_to_pfn(page) & ((1 << MAX_ORDER) - 1);
 
 	VM_BUG_ON(page_idx & ((1 << order) - 1));
 	VM_BUG_ON(bad_range(zone, page));
 
-	while (order < max_order - 1) {
+	while (order < MAX_ORDER-1) {
 		buddy_idx = __find_buddy_index(page_idx, order);
 		buddy = page + (buddy_idx - page_idx);
 		if (!page_is_buddy(page, buddy, order))
@@ -1468,7 +1493,7 @@ void split_page(struct page *page, unsigned int order)
 }
 EXPORT_SYMBOL_GPL(split_page);
 
-int __isolate_free_page(struct page *page, unsigned int order)
+static int __isolate_free_page(struct page *page, unsigned int order)
 {
 	unsigned long watermark;
 	struct zone *zone;
@@ -2492,6 +2517,9 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	bool sync_migration = false;
 	bool deferred_compaction = false;
 	bool contended_compaction = false;
+#ifdef CONFIG_SEC_OOM_KILLER
+	unsigned long oom_invoke_timeout = jiffies + HZ/4;
+#endif
 
 	/*
 	 * In the slowpath, we sanity check order to avoid ever trying to
@@ -2612,7 +2640,13 @@ rebalance:
 	 * If we failed to make any progress reclaiming, then we are
 	 * running out of options and have to consider going OOM
 	 */
-	if (!did_some_progress) {
+#ifdef CONFIG_SEC_OOM_KILLER
+#define SHOULD_CONSIDER_OOM (!did_some_progress \
+		|| time_after(jiffies, oom_invoke_timeout)) && boot_mode != 1
+#else
+#define SHOULD_CONSIDER_OOM !did_some_progress && boot_mode != 1
+#endif
+	if (SHOULD_CONSIDER_OOM) {
 		if ((gfp_mask & __GFP_FS) && !(gfp_mask & __GFP_NORETRY)) {
 			if (oom_killer_disabled)
 				goto nopage;
@@ -2620,6 +2654,13 @@ rebalance:
 			if ((current->flags & PF_DUMPCORE) &&
 			    !(gfp_mask & __GFP_NOFAIL))
 				goto nopage;
+#ifdef CONFIG_SEC_OOM_KILLER
+			if (did_some_progress)
+				pr_info("time's up : calling "
+					"__alloc_pages_may_oom(o:%d, gfp:0x%x)\n", order, gfp_mask);
+
+#endif
+
 			page = __alloc_pages_may_oom(gfp_mask, order,
 					zonelist, high_zoneidx,
 					nodemask, preferred_zone,
@@ -2645,6 +2686,9 @@ rebalance:
 					goto nopage;
 			}
 
+#ifdef CONFIG_SEC_OOM_KILLER
+			oom_invoke_timeout = jiffies + HZ/4;
+#endif
 			goto restart;
 		}
 	}
@@ -5575,6 +5619,9 @@ void setup_per_zone_wmarks(void)
  */
 static void __meminit calculate_zone_inactive_ratio(struct zone *zone)
 {
+#ifdef CONFIG_FIX_INACTIVE_RATIO
+	zone->inactive_ratio = 1;
+#else
 	unsigned int gb, ratio;
 
 	/* Zone size in gigabytes */
@@ -5585,6 +5632,7 @@ static void __meminit calculate_zone_inactive_ratio(struct zone *zone)
 		ratio = 1;
 
 	zone->inactive_ratio = ratio;
+#endif
 }
 
 static void __meminit setup_per_zone_inactive_ratio(void)

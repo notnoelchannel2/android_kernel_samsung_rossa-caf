@@ -425,19 +425,13 @@ static int rndis_qc_bam_connect(struct f_rndis_qc *dev)
 	struct usb_gadget *gadget = cdev->gadget;
 	enum peer_bam peer_bam = (dev->xport == USB_GADGET_XPORT_BAM2BAM_IPA) ?
 		IPA_P_BAM : A2_P_BAM;
-	int port_num;
 
 	dev->bam_port.cdev = cdev;
 	dev->bam_port.func = &dev->port.func;
 	dev->bam_port.in = dev->port.in_ep;
 	dev->bam_port.out = dev->port.out_ep;
 
-	port_num = (u_bam_data_func_to_port(USB_FUNC_RNDIS,
-					    RNDIS_QC_ACTIVE_PORT));
-	if (port_num < 0)
-		return port_num;
-
-	ret = bam2bam_data_port_select(port_num);
+	ret = bam2bam_data_port_select(RNDIS_QC_ACTIVE_PORT);
 	if (ret) {
 		pr_err("qc rndis bam port setup failed err:%d\n", ret);
 		return ret;
@@ -453,11 +447,11 @@ static int rndis_qc_bam_connect(struct f_rndis_qc *dev)
 		return ret;
 	}
 	if (peer_bam == A2_P_BAM)
-		ret = bam_data_connect(&dev->bam_port, port_num,
+		ret = bam_data_connect(&dev->bam_port, 0,
 			USB_GADGET_XPORT_BAM2BAM, src_connection_idx,
 			dst_connection_idx, USB_FUNC_RNDIS);
 	else {
-		ret = bam_data_connect(&dev->bam_port, port_num,
+		ret = bam_data_connect(&dev->bam_port, 0,
 			USB_GADGET_XPORT_BAM2BAM_IPA, src_connection_idx,
 			dst_connection_idx, USB_FUNC_RNDIS);
 		rndis_qc_open(&dev->port);
@@ -475,14 +469,9 @@ static int rndis_qc_bam_connect(struct f_rndis_qc *dev)
 
 static int rndis_qc_bam_disconnect(struct f_rndis_qc *dev)
 {
-	int port_num;
 	pr_debug("dev:%p. %s Disconnect BAM.\n", dev, __func__);
 
-	port_num = (u_bam_data_func_to_port(USB_FUNC_RNDIS,
-					    RNDIS_QC_ACTIVE_PORT));
-	if (port_num < 0)
-		return port_num;
-	bam_data_disconnect(&dev->bam_port, port_num);
+	bam_data_disconnect(&dev->bam_port, 0);
 
 	return 0;
 }
@@ -826,7 +815,6 @@ static void rndis_qc_suspend(struct usb_function *f)
 {
 	struct f_rndis_qc	*rndis = func_to_rndis_qc(f);
 	bool remote_wakeup_allowed;
-	int port_num;
 
 	if (f->config->cdev->gadget->speed == USB_SPEED_SUPER)
 		remote_wakeup_allowed = f->func_wakeup_allowed;
@@ -837,20 +825,8 @@ static void rndis_qc_suspend(struct usb_function *f)
 					__func__, remote_wakeup_allowed);
 
 	if (remote_wakeup_allowed) {
-		port_num = (u_bam_data_func_to_port(USB_FUNC_RNDIS,
-					    RNDIS_QC_ACTIVE_PORT));
-		if (port_num < 0)
-			return;
-		bam_data_suspend(port_num);
+		bam_data_suspend(RNDIS_QC_ACTIVE_PORT);
 	} else {
-		/* This is required as Linux host side RNDIS driver doesn't
-		 * send RNDIS_MESSAGE_PACKET_FILTER before suspending USB bus.
-		 * Hence we perform same operations explicitly here for Linux
-		 * host case. In case of windows, this RNDIS state machine is
-		 * already updated due to receiving of PACKET_FILTER.
-		 */
-		rndis_flow_control(rndis->config, true);
-
 		/*
 		 * When remote wakeup is disabled, IPA BAM is disconnected
 		 * because it cannot send new data until the USB bus is resumed.
@@ -877,7 +853,6 @@ static void rndis_qc_resume(struct usb_function *f)
 {
 	struct f_rndis_qc	*rndis = func_to_rndis_qc(f);
 	bool remote_wakeup_allowed;
-	int port_num;
 
 	pr_debug("%s: rndis resumed\n", __func__);
 
@@ -893,24 +868,12 @@ static void rndis_qc_resume(struct usb_function *f)
 		remote_wakeup_allowed = f->config->cdev->gadget->remote_wakeup;
 
 	if (remote_wakeup_allowed) {
-		port_num = (u_bam_data_func_to_port(USB_FUNC_RNDIS,
-						    RNDIS_QC_ACTIVE_PORT));
-		if (port_num < 0)
-			return;
-		bam_data_resume(port_num);
+		bam_data_resume(RNDIS_QC_ACTIVE_PORT);
 	} else {
 		/* Restore endpoint descriptors info. */
 		rndis->bam_port.in->desc  = rndis->in_ep_desc_backup;
 		rndis->bam_port.out->desc = rndis->out_ep_desc_backup;
 		rndis_qc_bam_connect(rndis);
-		/*
-		 * Linux Host doesn't sends RNDIS_MSG_INIT or non-zero value
-		 * set with RNDIS_MESSAGE_PACKET_FILTER after performing bus
-		 * resume. Hence trigger USB IPA transfer functionality
-		 * explicitly here. For Windows host case is also being
-		 * handle with RNDIS state machine.
-		 */
-		rndis_flow_control(rndis->config, false);
 	}
 
 	pr_debug("%s: RNDIS resume completed\n", __func__);
@@ -1137,14 +1100,6 @@ rndis_qc_unbind(struct usb_configuration *c, struct usb_function *f)
 	usb_ep_free_request(rndis->notify, rndis->notify_req);
 
 	if (rndis->xport == USB_GADGET_XPORT_BAM2BAM_IPA) {
-		/*
-		 * call flush_workqueue to make sure that any pending
-		 * disconnect_work() from u_bam_data.c file is being
-		 * flushed before calling this rndis_ipa_cleanup API
-		 * as rndis ipa disconnect API is required to be
-		 * called before this.
-		 */
-		bam_data_flush_workqueue();
 		rndis_ipa_cleanup(rndis_ipa_params.private);
 		rndis_ipa_supported = false;
 	}
@@ -1185,7 +1140,6 @@ void rndis_net_ready_notify(void)
 {
 	struct f_rndis_qc *rndis;
 	unsigned long flags;
-	int port_num;
 
 	spin_lock_irqsave(&rndis_lock, flags);
 	rndis = _rndis_qc;
@@ -1203,11 +1157,7 @@ void rndis_net_ready_notify(void)
 	pr_debug("%s: Set net_ready_trigger", __func__);
 	rndis->net_ready_trigger = true;
 	spin_unlock_irqrestore(&rndis_lock, flags);
-	port_num = (u_bam_data_func_to_port(USB_FUNC_RNDIS,
-					    RNDIS_QC_ACTIVE_PORT));
-	if (port_num < 0)
-		return;
-	bam_data_start_rx_tx(port_num);
+	bam_data_start_rx_tx(0);
 }
 
 
@@ -1474,7 +1424,7 @@ static int rndis_qc_init(void)
 		pr_err("rndis QC driver failed to register\n");
 	spin_lock_init(&rndis_lock);
 
-	ret = bam_data_setup(USB_FUNC_RNDIS, RNDIS_QC_NO_PORTS);
+	ret = bam_data_setup(RNDIS_QC_NO_PORTS);
 	if (ret) {
 		pr_err("bam_data_setup failed err: %d\n", ret);
 		return ret;

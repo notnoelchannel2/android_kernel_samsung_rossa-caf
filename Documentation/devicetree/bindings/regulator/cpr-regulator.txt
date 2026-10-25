@@ -304,22 +304,6 @@ Optional properties:
 				applied unconditionally.  This property can be used to add or subtract
 				static initial voltage margin from the regulator managed by the CPR
 				controller.
-- qcom,cpr-quot-offset-adjustment:	Array of integer tuples of target quotient offset adjustments to add
-				to the fused quotient offsets of each fuse corner. The elements in a tuple
-				are ordered from lowest voltage corner to highest voltage corner. Each tuple
-				must be of length defined by qcom,cpr-fuse-corners. If the qcom,cpr-fuse-version-map
-				property is specified, then qcom,cpr-quot-offset-adjustment must contain the
-				same number of tuples as qcom,cpr-fuse-version-map.  These tuples are then
-				mapped one-to-one in the order specified.  E.g. if the second
-				qcom,cpr-fuse-version-map tuple matches for a given device, then the quotient
-				offset adjustments defined in the second qcom,cpr-quot-offset-adjustment tuple
-				will be applied. If the qcom,cpr-fuse-version-map property is not specified,
-				then qcom,cpr-quot-offset-adjustment must contain a single tuple which is then
-				applied unconditionally.  If this property is specified, then the quotient
-				offset adjustment values are added to the target quotient offset values read
-				from fuses.
-				This property can be used to add or subtract static quotient offset margin from
-				the regulator managed by the CPR controller.
 - qcom,cpr-clamp-timer-interval:	The number of 64 reference clock cycle blocks to delay for whenever
 					the clamp signal, sensor mask registers or sensor bypass registers
 					change.  The CPR controller loop is disabled during this delay.
@@ -559,6 +543,25 @@ Optional properties:
 				read in order to get the redundant quotient offset for a fuse corner. This
 				property is the same as qcom,cpr-fuse-quot-offset except that it is only
 				utilized if a chip is configured to use the redundant set of fuse values.
+- qcom,cpr-fuse-min-quot-diff:	Array of values which define the minimum difference allowed between the adjusted
+				quotients of the fuse corners. The length of the array should be equal to the value
+				of the qcom,cpr-fuse-corners property. Where each element in the array maps to the
+				fuse corners in increasing order.
+- qcom,cpr-min-quot-diff-adjustment:	Array of integer tuples of target quotient offsets to be added to
+				the adjusted target quotients of each fuse corner. When the quotient difference
+				between two adjacent fuse corners is insufficient, the quotient for the higher fuse corner is
+				replaced with that of the lower fuse corner plus the adjustment value.
+				The elements in a tuple are ordered from lowest voltage corner to highest voltage corner.
+				Each tuple must be of the length defined by qcom,cpr-fuse-corners.
+				If the qcom,cpr-fuse-version-map property is specified, then qcom,cpr-min-quot-diff-adjustment
+				must contain the same number of tuples as qcom,cpr-fuse-version-map.  These tuples are then mapped
+				one-to-one in the order specified.  E.g. if the second qcom,cpr-fuse-version-map tuple matches
+				for a given device, then the quotient adjustments defined in the
+				second qcom,cpr-min-quot-diff-adjustment tuple will be applied.  If the
+				qcom,cpr-fuse-version-map property is not specified, then
+				qcom,cpr-min-quot-diff-adjustment must contain a single tuple which is then
+				applied unconditionally. The qcom,cpr-min-quot-diff-adjustment property must be specified
+				if the qcom,cpr-fuse-min-quot-diff property is specified.
 
 Example:
 	apc_vreg_corner: regulator@f9018000 {
@@ -676,16 +679,6 @@ Example:
 				<0 1>,
 				<0 1>;
 		qcom,cpr-quot-adjust-scaling-factor-max = <0 650 650>;
-		qcom,cpr-fuse-quot-offset =
-				<138 53 5 0>,
-				<138 53 5 0>,
-				<138 48 5 0>,
-				<138 58 5 0>;
-		qcom,cpr-fuse-redun-quot-offset =
-				<200 53 5 0>,
-				<200 53 5 0>,
-				<200 48 5 0>,
-				<200 58 5 0>;
 		qcom,cpr-fuse-init-voltage =
 				<27 36 6 0>,
 				<27 18 6 0>,
@@ -714,12 +707,15 @@ Example:
 				<0 0 (-210)>,
 				<0 0 (-60)>,
 				<0 0 (-94)>;
-		qcom,cpr-quot-offset-adjustment =
-				<0 0 (-5)>;
 		qcom,cpr-init-voltage-adjustment =
 				<0 0 (-100000)>,
 				<0 0 (-100000)>,
 				<0 0 (-45000)>;
+		qcom,cpr-fuse-min-quot-diff = <0 0 40>;
+		qcom,cpr-min-quot-diff-adjustment =
+					<0 0 0>,
+					<0 0 72>,
+					<0 0 104>;
 		qcom,cpr-virtual-corner-init-voltage-adjustment =
 			<0 0 0 (-10000) 0 0 0 0 0 0 0 0>,
 			<0 0 0 0 0 0 0 0 0 0 0 (-20000)>,

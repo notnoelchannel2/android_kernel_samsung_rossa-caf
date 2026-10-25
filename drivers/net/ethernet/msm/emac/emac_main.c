@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -44,12 +44,6 @@ const char emac_drv_version[] = DRV_VERSION;
 		NETIF_MSG_RX_ERR | NETIF_MSG_TX_ERR | NETIF_MSG_TX_QUEUED |   \
 		NETIF_MSG_INTR | NETIF_MSG_TX_DONE | NETIF_MSG_RX_STATUS |    \
 		NETIF_MSG_PKTDATA | NETIF_MSG_HW | NETIF_MSG_WOL)
-
-/* Error bits that will result in a received frame being discarded */
-#define EMAC_RRDES_ERROR (EMAC_RRDES_IPF | EMAC_RRDES_CRC | EMAC_RRDES_FAE | \
-			EMAC_RRDES_TRN | EMAC_RRDES_RNT | EMAC_RRDES_INC | \
-			EMAC_RRDES_FOV | EMAC_RRDES_LEN)
-#define EMAC_RRDES_STATS_DW_IDX 3
 
 #define EMAC_RRDESC_SIZE      4
 #define EMAC_TS_RRDESC_SIZE   6
@@ -153,11 +147,11 @@ void emac_reinit_locked(struct emac_adapter *adpt)
 {
 	WARN_ON(in_interrupt());
 
-	while (TEST_N_SET_FLAG(adpt, ADPT_STATE_RESETTING))
+	while (CHK_AND_SET_ADPT_FLAG(STATE_RESETTING))
 		msleep(20); /* Reset might take few 10s of ms */
 
-	if (TEST_FLAG(adpt, ADPT_STATE_DOWN)) {
-		CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+	if (CHK_ADPT_FLAG(STATE_DOWN)) {
+		CLI_ADPT_FLAG(STATE_RESETTING);
 		return;
 	}
 
@@ -169,24 +163,24 @@ void emac_reinit_locked(struct emac_adapter *adpt)
 	}
 	emac_up(adpt);
 
-	CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+	CLI_ADPT_FLAG(STATE_RESETTING);
 }
 
 static void emac_task_schedule(struct emac_adapter *adpt)
 {
-	if (!TEST_FLAG(adpt, ADPT_STATE_DOWN) &&
-	    !TEST_FLAG(adpt, ADPT_STATE_WATCH_DOG)) {
-		SET_FLAG(adpt, ADPT_STATE_WATCH_DOG);
+	if (!CHK_ADPT_FLAG(STATE_DOWN) &&
+	    !CHK_ADPT_FLAG(STATE_WATCH_DOG)) {
+		SET_ADPT_FLAG(STATE_WATCH_DOG);
 		schedule_work(&adpt->emac_task);
 	}
 }
 
 static void emac_check_lsc(struct emac_adapter *adpt)
 {
-	SET_FLAG(adpt, ADPT_TASK_LSC_REQ);
+	SET_ADPT_FLAG(TASK_LSC_REQ);
 	adpt->link_jiffies = jiffies + EMAC_TRY_LINK_TIMEOUT;
 
-	if (!TEST_FLAG(adpt, ADPT_STATE_DOWN))
+	if (!CHK_ADPT_FLAG(STATE_DOWN))
 		emac_task_schedule(adpt);
 }
 
@@ -195,8 +189,8 @@ static void emac_tx_timeout(struct net_device *netdev)
 {
 	struct emac_adapter *adpt = netdev_priv(netdev);
 
-	if (!TEST_FLAG(adpt, ADPT_STATE_DOWN)) {
-		SET_FLAG(adpt, ADPT_TASK_REINIT_REQ);
+	if (!CHK_ADPT_FLAG(STATE_DOWN)) {
+		SET_ADPT_FLAG(TASK_REINIT_REQ);
 		emac_task_schedule(adpt);
 	}
 }
@@ -210,13 +204,13 @@ static void emac_set_rx_mode(struct net_device *netdev)
 
 	/* Check for Promiscuous and All Multicast modes */
 	if (netdev->flags & IFF_PROMISC) {
-		SET_FLAG(hw, HW_PROMISC_EN);
+		SET_HW_FLAG(PROMISC_EN);
 	} else if (netdev->flags & IFF_ALLMULTI) {
-		SET_FLAG(hw, HW_MULTIALL_EN);
-		CLR_FLAG(hw, HW_PROMISC_EN);
+		SET_HW_FLAG(MULTIALL_EN);
+		CLI_HW_FLAG(PROMISC_EN);
 	} else {
-		CLR_FLAG(hw, HW_MULTIALL_EN);
-		CLR_FLAG(hw, HW_PROMISC_EN);
+		CLI_HW_FLAG(MULTIALL_EN);
+		CLI_HW_FLAG(PROMISC_EN);
 	}
 	emac_hw_config_mac_ctrl(hw);
 
@@ -533,7 +527,7 @@ static void emac_poll_hwtxtstamp(struct emac_adapter *adpt)
 
 static void emac_schedule_hwtxtstamp_task(struct emac_adapter *adpt)
 {
-	if (TEST_FLAG(adpt, ADPT_STATE_DOWN))
+	if (CHK_ADPT_FLAG(STATE_DOWN))
 		return;
 
 	if (schedule_work(&adpt->hwtxtstamp_task))
@@ -628,16 +622,7 @@ static void emac_handle_rx(struct emac_adapter *adpt,
 		num_consume_pkts--;
 		count++;
 
-		/* Due to a HW issue in L4 check sum detection (UDP/TCP frags
-		 * with DF set are marked as error), drop packets based on the
-		 * error mask rather than the summary bit (ignoring L4F errors)
-		 */
-		if (srrd.dfmt.dw[EMAC_RRDES_STATS_DW_IDX] & EMAC_RRDES_ERROR) {
-			emac_dbg(adpt, rx_status,
-				"Drop error packet[RRD: 0x%x:0x%x:0x%x:0x%x]\n",
-				 srrd.dfmt.dw[0], srrd.dfmt.dw[1],
-				 srrd.dfmt.dw[2], srrd.dfmt.dw[3]);
-
+		if (srrd.genr.res || srrd.genr.lene) {
 			dev_kfree_skb(skb);
 			continue;
 		}
@@ -646,12 +631,11 @@ static void emac_handle_rx(struct emac_adapter *adpt,
 		skb->dev = netdev;
 		skb->protocol = eth_type_trans(skb, skb->dev);
 		if (netdev->features & NETIF_F_RXCSUM)
-			skb->ip_summed = ((srrd.genr.l4f) ?
-					  CHECKSUM_NONE : CHECKSUM_UNNECESSARY);
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
 		else
 			skb_checksum_none_assert(skb);
 
-		if (TEST_FLAG(hw, HW_TS_RX_EN)) {
+		if (CHK_HW_FLAG(TS_RX_EN)) {
 			struct skb_shared_hwtstamps *hwts = skb_hwtstamps(skb);
 
 			hwts->hwtstamp = ktime_set(srrd.genr.ts_high,
@@ -929,7 +913,7 @@ static void emac_tx_map(struct emac_adapter *adpt,
 	/* The last tpd */
 	emac_set_tpdesc_lastfrag(txque);
 
-	if (TEST_FLAG(hw, HW_TS_TX_EN) &&
+	if (CHK_HW_FLAG(TS_TX_EN) &&
 	    (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP)) {
 		struct sk_buff *skb_ts = skb_clone(skb, GFP_ATOMIC);
 
@@ -971,7 +955,7 @@ static int emac_start_xmit_frame(struct emac_adapter *adpt,
 	union emac_sw_tpdesc stpd;
 	u32 prod_idx;
 
-	if (TEST_FLAG(adpt, ADPT_STATE_DOWN)) {
+	if (CHK_ADPT_FLAG(STATE_DOWN)) {
 		dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
 	}
@@ -1065,7 +1049,7 @@ static irqreturn_t emac_interrupt(int irq, void *data)
 			emac_warn(adpt, intr, "isr error status 0x%x\n",
 				  status & ISR_ERROR);
 			/* reset MAC */
-			SET_FLAG(adpt, ADPT_TASK_REINIT_REQ);
+			SET_ADPT_FLAG(TASK_REINIT_REQ);
 			emac_task_schedule(adpt);
 		}
 
@@ -1127,8 +1111,8 @@ static irqreturn_t emac_sgmii_interrupt(int irq, void *data)
 			break;
 
 		if (status & SGMII_PHY_INTERRUPT_ERR) {
-			SET_FLAG(adpt, ADPT_TASK_CHK_SGMII_REQ);
-			if (!TEST_FLAG(adpt, ADPT_STATE_DOWN))
+			SET_ADPT_FLAG(TASK_CHK_SGMII_REQ);
+			if (!CHK_ADPT_FLAG(STATE_DOWN))
 				emac_task_schedule(adpt);
 		}
 
@@ -1140,7 +1124,7 @@ static irqreturn_t emac_sgmii_interrupt(int irq, void *data)
 				  "failed to clear sgmii intr, status=0x%x\n",
 				  status);
 			/* reset */
-			SET_FLAG(adpt, ADPT_TASK_REINIT_REQ);
+			SET_ADPT_FLAG(TASK_REINIT_REQ);
 			emac_task_schedule(adpt);
 			break;
 		}
@@ -1184,9 +1168,9 @@ static int emac_set_features(struct net_device *netdev,
 
 	netdev->features = features;
 	if (netdev->features & NETIF_F_HW_VLAN_CTAG_RX)
-		SET_FLAG(hw, HW_VLANSTRIP_EN);
+		SET_HW_FLAG(VLANSTRIP_EN);
 	else
-		CLR_FLAG(hw, HW_VLANSTRIP_EN);
+		CLI_HW_FLAG(VLANSTRIP_EN);
 
 	if (netif_running(netdev))
 		emac_reinit_locked(adpt);
@@ -1673,10 +1657,10 @@ int emac_up(struct emac_adapter *adpt)
 	emac_enable_intr(adpt);
 
 	netif_start_queue(netdev);
-	CLR_FLAG(adpt, ADPT_STATE_DOWN);
+	CLI_ADPT_FLAG(STATE_DOWN);
 
 	/* check link status */
-	SET_FLAG(adpt, ADPT_TASK_LSC_REQ);
+	SET_ADPT_FLAG(TASK_LSC_REQ);
 	adpt->link_jiffies = jiffies + EMAC_TRY_LINK_TIMEOUT;
 	mod_timer(&adpt->emac_timer, jiffies);
 
@@ -1697,7 +1681,7 @@ void emac_down(struct emac_adapter *adpt, u32 ctrl)
 	unsigned long flags;
 	int i;
 
-	SET_FLAG(adpt, ADPT_STATE_DOWN);
+	SET_ADPT_FLAG(STATE_DOWN);
 	netif_stop_queue(netdev);
 
 	netif_carrier_off(netdev);
@@ -1712,9 +1696,9 @@ void emac_down(struct emac_adapter *adpt, u32 ctrl)
 	for (i = 0; (!adpt->no_mdio_gpio) && i < EMAC_NUM_GPIO; i++)
 		gpio_free(adpt->gpio_info[i].gpio);
 
-	CLR_FLAG(adpt, ADPT_TASK_LSC_REQ);
-	CLR_FLAG(adpt, ADPT_TASK_REINIT_REQ);
-	CLR_FLAG(adpt, ADPT_TASK_CHK_SGMII_REQ);
+	CLI_ADPT_FLAG(TASK_LSC_REQ);
+	CLI_ADPT_FLAG(TASK_REINIT_REQ);
+	CLI_ADPT_FLAG(TASK_CHK_SGMII_REQ);
 	del_timer_sync(&adpt->emac_timer);
 
 	cancel_work_sync(&adpt->hwtxtstamp_task);
@@ -1769,21 +1753,21 @@ static int emac_close(struct net_device *netdev)
 	struct emac_hw *hw = &adpt->hw;
 
 	/* ensure no task is running and no reset is in progress */
-	while (TEST_N_SET_FLAG(adpt, ADPT_STATE_RESETTING))
+	while (CHK_AND_SET_ADPT_FLAG(STATE_RESETTING))
 		msleep(20); /* Reset might take few 10s of ms */
 
 	pm_runtime_disable(netdev->dev.parent);
-	if (!TEST_FLAG(adpt, ADPT_STATE_DOWN))
+	if (!CHK_ADPT_FLAG(STATE_DOWN))
 		emac_down(adpt, EMAC_HW_CTRL_RESET_MAC);
 	else
 		emac_hw_reset_mac(hw);
 
-	if (TEST_FLAG(hw, HW_PTP_CAP))
+	if (CHK_HW_FLAG(PTP_CAP))
 		emac_ptp_stop(hw);
 
 	emac_free_all_rtx_descriptor(adpt);
 
-	CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+	CLI_ADPT_FLAG(STATE_RESETTING);
 	return 0;
 }
 
@@ -1877,7 +1861,7 @@ static int emac_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 	case SIOCSMIIREG:
 		return emac_mii_ioctl(netdev, ifr, cmd);
 	case SIOCSHWTSTAMP:
-		if (TEST_FLAG(hw, HW_PTP_CAP))
+		if (CHK_HW_FLAG(PTP_CAP))
 			return emac_tstamp_ioctl(netdev, ifr, cmd);
 	default:
 		return -EOPNOTSUPP;
@@ -1977,12 +1961,11 @@ static const struct net_device_ops emac_netdev_ops = {
 /* Reinitialize the interface/HW if required */
 static void emac_reinit_task_routine(struct emac_adapter *adpt)
 {
-	if (!TEST_FLAG(adpt, ADPT_TASK_REINIT_REQ))
+	if (!CHK_ADPT_FLAG(TASK_REINIT_REQ))
 		return;
-	CLR_FLAG(adpt, ADPT_TASK_REINIT_REQ);
+	CLI_ADPT_FLAG(TASK_REINIT_REQ);
 
-	if (TEST_FLAG(adpt, ADPT_STATE_DOWN) ||
-	    TEST_FLAG(adpt, ADPT_STATE_RESETTING))
+	if (CHK_ADPT_FLAG(STATE_DOWN) || CHK_ADPT_FLAG(STATE_RESETTING))
 		return;
 
 	emac_reinit_locked(adpt);
@@ -2012,15 +1995,15 @@ static void emac_link_task_routine(struct emac_adapter *adpt)
 	struct emac_hw *hw = &adpt->hw;
 	char *link_desc;
 
-	if (!TEST_FLAG(adpt, ADPT_TASK_LSC_REQ))
+	if (!CHK_ADPT_FLAG(TASK_LSC_REQ))
 		return;
-	CLR_FLAG(adpt, ADPT_TASK_LSC_REQ);
+	CLI_ADPT_FLAG(TASK_LSC_REQ);
 
 	/* ensure that no reset is in progess while link task is running */
-	while (TEST_N_SET_FLAG(adpt, ADPT_STATE_RESETTING))
+	while (CHK_AND_SET_ADPT_FLAG(STATE_RESETTING))
 		msleep(20); /* Reset might take few 10s of ms */
 
-	if (TEST_FLAG(adpt, ADPT_STATE_DOWN))
+	if (CHK_ADPT_FLAG(STATE_DOWN))
 		goto link_task_done;
 
 	emac_check_phy_link(hw, &hw->link_speed, &hw->link_up);
@@ -2058,7 +2041,7 @@ static void emac_link_task_routine(struct emac_adapter *adpt)
 		netif_wake_queue(netdev);
 	} else {
 		if (time_after(adpt->link_jiffies, jiffies))
-			SET_FLAG(adpt, ADPT_TASK_LSC_REQ);
+			SET_ADPT_FLAG(TASK_LSC_REQ);
 
 		/* only continue if link was up previously */
 		if (!netif_carrier_ok(netdev))
@@ -2077,7 +2060,7 @@ static void emac_link_task_routine(struct emac_adapter *adpt)
 	mod_timer(&adpt->emac_timer, jiffies);
 
 link_task_done:
-	CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+	CLI_ADPT_FLAG(STATE_RESETTING);
 }
 
 /* Check SGMII for error */
@@ -2085,15 +2068,15 @@ static void emac_sgmii_task_routine(struct emac_adapter *adpt)
 {
 	struct emac_hw *hw = &adpt->hw;
 
-	if (!TEST_FLAG(adpt, ADPT_TASK_CHK_SGMII_REQ))
+	if (!CHK_ADPT_FLAG(TASK_CHK_SGMII_REQ))
 		return;
-	CLR_FLAG(adpt, ADPT_TASK_CHK_SGMII_REQ);
+	CLI_ADPT_FLAG(TASK_CHK_SGMII_REQ);
 
 	/* ensure that no reset is in progess while link task is running */
-	while (TEST_N_SET_FLAG(adpt, ADPT_STATE_RESETTING))
+	while (CHK_AND_SET_ADPT_FLAG(STATE_RESETTING))
 		msleep(20); /* Reset might take few 10s of ms */
 
-	if (TEST_FLAG(adpt, ADPT_STATE_DOWN))
+	if (CHK_ADPT_FLAG(STATE_DOWN))
 		goto sgmii_task_done;
 
 	if (emac_reg_r32(hw, EMAC_SGMII_PHY, EMAC_SGMII_PHY_RX_CHK_STATUS)
@@ -2103,7 +2086,7 @@ static void emac_sgmii_task_routine(struct emac_adapter *adpt)
 	emac_err(adpt, "SGMII CDR not locked\n");
 
 sgmii_task_done:
-	CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+	CLI_ADPT_FLAG(STATE_RESETTING);
 }
 
 /* Watchdog task routine */
@@ -2112,7 +2095,7 @@ static void emac_task_routine(struct work_struct *work)
 	struct emac_adapter *adpt = container_of(work, struct emac_adapter,
 						 emac_task);
 
-	if (!TEST_FLAG(adpt, ADPT_STATE_WATCH_DOG))
+	if (!CHK_ADPT_FLAG(STATE_WATCH_DOG))
 		emac_warn(adpt, timer, "flag STATE_WATCH_DOG doesn't set\n");
 
 	emac_reinit_task_routine(adpt);
@@ -2121,7 +2104,7 @@ static void emac_task_routine(struct work_struct *work)
 
 	emac_sgmii_task_routine(adpt);
 
-	CLR_FLAG(adpt, ADPT_STATE_WATCH_DOG);
+	CLI_ADPT_FLAG(STATE_WATCH_DOG);
 }
 
 /* Timer routine */
@@ -2134,7 +2117,7 @@ static void emac_timer_routine(unsigned long data)
 		return;
 
 	/* poll faster when waiting for link */
-	if (TEST_FLAG(adpt, ADPT_TASK_LSC_REQ))
+	if (CHK_ADPT_FLAG(TASK_LSC_REQ))
 		delay = HZ / 10;
 	else
 		delay = 2 * HZ;
@@ -2380,12 +2363,12 @@ static int emac_suspend(struct device *device)
 	netif_device_detach(netdev);
 	if (netif_running(netdev)) {
 		/* ensure no task is running and no reset is in progress */
-		while (TEST_N_SET_FLAG(adpt, ADPT_STATE_RESETTING))
+		while (CHK_AND_SET_ADPT_FLAG(STATE_RESETTING))
 			msleep(20); /* Reset might take few 10s of ms */
 
 		emac_down(adpt, 0);
 
-		CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+		CLI_ADPT_FLAG(STATE_RESETTING);
 	}
 
 	emac_check_phy_link(hw, &speed, &link_up);
@@ -2775,7 +2758,7 @@ static int emac_probe(struct platform_device *pdev)
 	adpt->rfdesc_size = EMAC_RFDESC_SIZE;
 
 	if (adpt->tstamp_en)
-		SET_FLAG(hw, HW_PTP_CAP);
+		SET_HW_FLAG(PTP_CAP);
 
 	/* init netdev */
 	netdev->netdev_ops = &emac_netdev_ops;
@@ -2839,8 +2822,8 @@ static int emac_probe(struct platform_device *pdev)
 	skb_queue_head_init(&adpt->hwtxtstamp_ready_queue);
 	INIT_WORK(&adpt->hwtxtstamp_task, emac_hwtxtstamp_task_routine);
 
-	SET_FLAG(hw, HW_VLANSTRIP_EN);
-	SET_FLAG(adpt, ADPT_STATE_DOWN);
+	SET_HW_FLAG(VLANSTRIP_EN);
+	SET_ADPT_FLAG(STATE_DOWN);
 	strlcpy(netdev->name, "eth%d", sizeof(netdev->name));
 
 	retval = register_netdev(netdev);
@@ -2849,7 +2832,7 @@ static int emac_probe(struct platform_device *pdev)
 		goto err_register_netdev;
 	}
 
-	if (TEST_FLAG(hw, HW_PTP_CAP))
+	if (CHK_HW_FLAG(PTP_CAP))
 		emac_ptp_init(adpt->netdev);
 
 	pr_info("%s - version %s\n", emac_drv_description, emac_drv_version);
@@ -2883,7 +2866,7 @@ static int emac_remove(struct platform_device *pdev)
 	pr_info("exiting %s\n", emac_drv_name);
 
 	unregister_netdev(netdev);
-	if (TEST_FLAG(hw, HW_PTP_CAP))
+	if (CHK_HW_FLAG(PTP_CAP))
 		emac_ptp_remove(netdev);
 
 	emac_disable_clks(adpt);

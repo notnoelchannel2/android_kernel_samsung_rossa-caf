@@ -236,8 +236,8 @@ static inline void set_next_event(const int access, unsigned long evt,
 	unsigned long ctrl;
 	ctrl = arch_timer_reg_read(access, ARCH_TIMER_REG_CTRL, clk);
 	ctrl &= ~ARCH_TIMER_CTRL_IT_MASK;
-	arch_timer_reg_write(access, ARCH_TIMER_REG_TVAL, evt, clk);
 	arch_timer_reg_write(access, ARCH_TIMER_REG_CTRL, ctrl, clk);
+	arch_timer_reg_write(access, ARCH_TIMER_REG_TVAL, evt, clk);
 }
 
 static int arch_timer_set_next_event_virt(unsigned long evt,
@@ -325,20 +325,7 @@ static void arch_counter_set_user_access(void)
 	arch_timer_set_cntkctl(cntkctl);
 }
 
-static void arch_timer_configure_evtstream(void)
-{
-	int evt_stream_div, pos;
-
-	/* Find the closest power of two to the divisor */
-	evt_stream_div = arch_timer_rate / ARCH_TIMER_EVT_STREAM_FREQ;
-	pos = fls(evt_stream_div);
-	if (pos > 1 && !(evt_stream_div & (1 << (pos - 2))))
-		pos--;
-	/* enable event stream */
-	arch_timer_evtstrm_enable(min(pos, 15));
-}
-
-static int arch_timer_setup(struct clock_event_device *clk)
+static int __cpuinit arch_timer_setup(struct clock_event_device *clk)
 {
 	__arch_timer_setup(ARCH_CP15_TIMER, clk);
 
@@ -351,8 +338,6 @@ static int arch_timer_setup(struct clock_event_device *clk)
 	}
 
 	arch_counter_set_user_access();
-	if (IS_ENABLED(CONFIG_ARM_ARCH_TIMER_EVTSTREAM))
-		arch_timer_configure_evtstream();
 
 	return 0;
 }

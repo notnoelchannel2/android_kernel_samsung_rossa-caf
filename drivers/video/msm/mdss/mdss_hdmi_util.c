@@ -15,79 +15,38 @@
 #include <linux/delay.h>
 #include "mdss_hdmi_util.h"
 
-#define RESOLUTION_NAME_STR_LEN 30
+static struct msm_hdmi_mode_timing_info
+	hdmi_supported_video_mode_lut[HDMI_VFRMT_MAX];
 
-static char res_buf[RESOLUTION_NAME_STR_LEN];
-
-int hdmi_get_supported_mode(struct msm_hdmi_mode_timing_info *info,
-	struct hdmi_util_ds_data *ds_data, u32 mode)
+void hdmi_del_supported_mode(u32 mode)
 {
-	int ret;
+	struct msm_hdmi_mode_timing_info *ret = NULL;
+	DEV_DBG("%s: removing %s\n", __func__,
+		 msm_hdmi_mode_2string(mode));
+	ret = &hdmi_supported_video_mode_lut[mode];
+	if (ret != NULL && ret->supported)
+		ret->supported = false;
+}
 
-	if (!info || !ds_data)
-		return -EINVAL;
+const struct msm_hdmi_mode_timing_info *hdmi_get_supported_mode(u32 mode)
+{
+	const struct msm_hdmi_mode_timing_info *ret = NULL;
 
 	if (mode >= HDMI_VFRMT_MAX)
-		return -EINVAL;
+		return NULL;
 
-	ret = msm_hdmi_get_timing_info(info, mode);
+	ret = &hdmi_supported_video_mode_lut[mode];
 
-	if (!ret && ds_data && ds_data->ds_registered && ds_data->ds_max_clk) {
-		if (info->pixel_freq > ds_data->ds_max_clk)
-			info->supported = false;
-	}
+	if (ret == NULL || !ret->supported)
+		return NULL;
 
 	return ret;
 } /* hdmi_get_supported_mode */
 
-const char *msm_hdmi_mode_2string(u32 mode)
-{
-	static struct msm_hdmi_mode_timing_info ri = {0};
-	char *aspect_ratio;
-
-	if (mode >= HDMI_VFRMT_MAX)
-		return "???";
-
-	if (hdmi_get_supported_mode(&ri, NULL, mode))
-		return "???";
-
-	memset(res_buf, 0, sizeof(res_buf));
-
-	if (!ri.supported) {
-		snprintf(res_buf, RESOLUTION_NAME_STR_LEN, "%d", mode);
-		return res_buf;
-	}
-
-	switch (ri.ar) {
-	case HDMI_RES_AR_4_3:
-		aspect_ratio = "4/3";
-		break;
-	case HDMI_RES_AR_5_4:
-		aspect_ratio = "5/4";
-		break;
-	case HDMI_RES_AR_16_9:
-		aspect_ratio = "16/9";
-		break;
-	case HDMI_RES_AR_16_10:
-		aspect_ratio = "16/10";
-		break;
-	default:
-		aspect_ratio = "???";
-	};
-
-	snprintf(res_buf, RESOLUTION_NAME_STR_LEN, "%dx%d %s%dHz %s",
-		ri.active_h, ri.active_v, ri.interlaced ? "i" : "p",
-		ri.refresh_rate / 1000, aspect_ratio);
-
-	return res_buf;
-}
-
-int hdmi_get_video_id_code(struct msm_hdmi_mode_timing_info *timing_in,
-	struct hdmi_util_ds_data *ds_data)
+int hdmi_get_video_id_code(struct msm_hdmi_mode_timing_info *timing_in)
 {
 	int i, vic = -1;
-	struct msm_hdmi_mode_timing_info supported_timing = {0};
-	u32 ret;
+	struct msm_hdmi_mode_timing_info *supported_timing;
 
 	if (!timing_in) {
 		DEV_ERR("%s: invalid input\n", __func__);
@@ -96,46 +55,45 @@ int hdmi_get_video_id_code(struct msm_hdmi_mode_timing_info *timing_in,
 
 	/* active_low_h, active_low_v and interlaced are not checked against */
 	for (i = 0; i < HDMI_VFRMT_MAX; i++) {
-		ret = hdmi_get_supported_mode(&supported_timing, ds_data, i);
+		supported_timing = &hdmi_supported_video_mode_lut[i];
 
-		if (ret || !supported_timing.supported)
+		if (!supported_timing->supported)
 			continue;
-		if (timing_in->active_h != supported_timing.active_h)
+		if (timing_in->active_h != supported_timing->active_h)
 			continue;
-		if (timing_in->front_porch_h != supported_timing.front_porch_h)
+		if (timing_in->front_porch_h != supported_timing->front_porch_h)
 			continue;
-		if (timing_in->pulse_width_h != supported_timing.pulse_width_h)
+		if (timing_in->pulse_width_h != supported_timing->pulse_width_h)
 			continue;
-		if (timing_in->back_porch_h != supported_timing.back_porch_h)
+		if (timing_in->back_porch_h != supported_timing->back_porch_h)
 			continue;
-		if (timing_in->active_v != supported_timing.active_v)
+		if (timing_in->active_v != supported_timing->active_v)
 			continue;
-		if (timing_in->front_porch_v != supported_timing.front_porch_v)
+		if (timing_in->front_porch_v != supported_timing->front_porch_v)
 			continue;
-		if (timing_in->pulse_width_v != supported_timing.pulse_width_v)
+		if (timing_in->pulse_width_v != supported_timing->pulse_width_v)
 			continue;
-		if (timing_in->back_porch_v != supported_timing.back_porch_v)
+		if (timing_in->back_porch_v != supported_timing->back_porch_v)
 			continue;
-		if (timing_in->pixel_freq != supported_timing.pixel_freq)
+		if (timing_in->pixel_freq != supported_timing->pixel_freq)
 			continue;
-		if (timing_in->refresh_rate != supported_timing.refresh_rate)
+		if (timing_in->refresh_rate != supported_timing->refresh_rate)
 			continue;
 
-		vic = (int)supported_timing.video_format;
+		vic = (int)supported_timing->video_format;
 		break;
 	}
 
 	if (vic < 0) {
 		for (i = 0; i < HDMI_VFRMT_MAX; i++) {
-			ret = hdmi_get_supported_mode(&supported_timing,
-				ds_data, i);
-			if (ret || !supported_timing.supported)
+			supported_timing = &hdmi_supported_video_mode_lut[i];
+			if (!supported_timing->supported)
 				continue;
-			if (timing_in->active_h != supported_timing.active_h)
+			if (timing_in->active_h != supported_timing->active_h)
 				continue;
-			if (timing_in->active_v != supported_timing.active_v)
+			if (timing_in->active_v != supported_timing->active_v)
 				continue;
-			vic = (int)supported_timing.video_format;
+			vic = (int)supported_timing->video_format;
 			break;
 		}
 	}
@@ -151,6 +109,25 @@ exit:
 
 	return vic;
 } /* hdmi_get_video_id_code */
+
+/* Table indicating the video format supported by the HDMI TX Core */
+/* Valid pclk rates (Mhz): 25.2, 27, 27.03, 74.25, 148.5, 268.5, 297 */
+void hdmi_setup_video_mode_lut(void)
+{
+	MSM_HDMI_MODES_INIT_TIMINGS(hdmi_supported_video_mode_lut);
+
+	/* Add all supported CEA modes to the lut */
+	MSM_HDMI_MODES_SET_SUPP_TIMINGS(
+		hdmi_supported_video_mode_lut, MSM_HDMI_MODES_CEA);
+
+	/* Add all supported extended hdmi modes to the lut */
+	MSM_HDMI_MODES_SET_SUPP_TIMINGS(
+		hdmi_supported_video_mode_lut, MSM_HDMI_MODES_XTND);
+
+	/* Add any other specific DVI timings (DVI modes, etc.) */
+	MSM_HDMI_MODES_SET_SUPP_TIMINGS(
+		hdmi_supported_video_mode_lut, MSM_HDMI_MODES_DVI);
+} /* hdmi_setup_video_mode_lut */
 
 static const char *hdmi_get_single_video_3d_fmt_2string(u32 format)
 {
@@ -201,7 +178,7 @@ static void hdmi_ddc_print_data(struct hdmi_tx_ddc_data *ddc_data,
 		return;
 	}
 
-	DEV_DBG("%s: buf=%p, d_len=0x%x, d_addr=0x%x, no_align=%d\n",
+	DEV_DBG("%s: buf=%pK, d_len=0x%x, d_addr=0x%x, no_align=%d\n",
 		caller, ddc_data->data_buf, ddc_data->data_len,
 		ddc_data->dev_addr, ddc_data->no_align);
 	DEV_DBG("%s: offset=0x%x, req_len=0x%x, retry=%d, what=%s\n",

@@ -133,31 +133,6 @@
 			};
 		};
 
-		mhl_intr: mhl_intr {
-			qcom,pins = <&gp 57>;
-			qcom,num-grp-pins = <1>;
-			qcom,pin-func = <0>;
-			label = "mhl_intr";
-
-			mhl_intr_active: mhl_intr_active {
-				bias-pull-up;
-				input-enable;
-			};
-		};
-
-		mhl_reset: mhl_reset {
-			qcom,pins = <&gp 58>;
-			qcom,num-grp-pins = <1>;
-			qcom,pin-func = <0>;
-			label = "mhl_reset";
-
-			mhl_reset_active: mhl_reset_active {
-				drive-strength = <2>;
-				bias-pull-down;
-				output-low;
-			};
-		};
-
 		spi_0_active {
 			/* MOSI, MISO, CLK */
 			qcom,pins = <&gp 0>, <&gp 1>, <&gp 3>;
@@ -232,9 +207,9 @@
 		audio_ext_devices {
 			qcom,pins = <&gp 96>;
 			qcom,num-grp-pins = <1>;
-			label = "audio-ext-speakers";
+			label = "audio-ext-mic";
 			/* default state */
-			audio_ext_speakers: audio_ext_speakers {
+			audio_ext_mic: audio_ext_mic {
 				drive-strength = <2>;
 				bias-pull-up;
 			};
@@ -1199,14 +1174,14 @@
 		};
 
 		cnss_lpass: cnss_lpass {
-			qcom,pins = <&gp 112>;
+			qcom,pins = <&gp 111>;
 			qcom,num-grp-pins = <1>;
-			qcom,pin-func = <0>;
+			qcom,pin-func = <2>;
 			label = "cnss-lpass";
 			/* default state */
 			cnss_lpass_default: cnss_lpass_default {
-				drive-strength = <16>;
-				bias-pull-down;
+				drive-strength = <2>;
+				bias-pull-up;
 			};
 		};
 
@@ -1275,11 +1250,6 @@
 			pcie1_wake_default: pcie1_wake_default {
 				drive-strength = <2>;
 				bias-pull-down;
-			};
-
-			pcie1_wake_sleep: pcie1_wake_sleep {
-				drive-strength = <2>;
-				bias-disable;
 			};
 		};
 

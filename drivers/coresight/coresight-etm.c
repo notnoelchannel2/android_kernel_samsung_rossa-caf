@@ -2364,6 +2364,8 @@ static int etm_probe(struct platform_device *pdev)
 		goto err0;
 	}
 
+	etmdrvdata[drvdata->cpu] = drvdata;
+
 	if (count++ == 0)
 		register_hotcpu_notifier(&etm_cpu_notifier);
 
@@ -2401,23 +2403,20 @@ static int etm_probe(struct platform_device *pdev)
 		}
 	}
 
-	etmdrvdata[drvdata->cpu] = drvdata;
-
 	put_online_cpus();
 
 	clk_disable_unprepare(drvdata->clk);
 
-	mutex_lock(&drvdata->mutex);
-	if (drvdata->os_unlock && !drvdata->init) {
+	if (drvdata->os_unlock) {
+		mutex_lock(&drvdata->mutex);
 		ret = etm_late_init(drvdata);
 		if (ret) {
 			mutex_unlock(&drvdata->mutex);
 			goto err1;
 		}
 		drvdata->init = true;
+		mutex_unlock(&drvdata->mutex);
 	}
-	mutex_unlock(&drvdata->mutex);
-
 	return 0;
 err1:
 	if (--count == 0)

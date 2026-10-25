@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -139,7 +139,6 @@ static int modem_powerup(const struct subsys_desc *subsys)
 	INIT_COMPLETION(drv->stop_ack);
 	drv->subsys_desc.ramdump_disable = 0;
 	drv->ignore_errors = false;
-	drv->q6->desc.fw_name = subsys->fw_name;
 	return pil_boot(&drv->q6->desc);
 }
 
@@ -187,12 +186,7 @@ static irqreturn_t modem_wdog_bite_intr_handler(int irq, void *dev_id)
 	struct modem_data *drv = subsys_to_drv(dev_id);
 	if (drv->ignore_errors)
 		return IRQ_HANDLED;
-
 	pr_err("Watchdog bite received from modem software!\n");
-	if (drv->subsys_desc.system_debug &&
-			!gpio_get_value(drv->subsys_desc.err_fatal_gpio))
-		panic("%s: System ramdump requested. Triggering device restart!\n",
-							__func__);
 	subsys_set_crash_status(drv->subsys, true);
 	restart_modem(drv);
 	return IRQ_HANDLED;

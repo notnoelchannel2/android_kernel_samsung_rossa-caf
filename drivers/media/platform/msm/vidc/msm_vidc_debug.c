@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -24,11 +24,9 @@ int msm_fw_low_power_mode = 0x1;
 int msm_vidc_hw_rsp_timeout = 1000;
 u32 msm_fw_coverage = 0x0;
 int msm_vidc_vpe_csc_601_to_709 = 0x0;
-int msm_vidc_dec_dcvs_mode = 0x1;
-int msm_vidc_enc_dcvs_mode = 0x1;
+int msm_vidc_dcvs_mode = 0x1;
 int msm_vidc_sys_idle_indicator = 0x0;
 u32 msm_vidc_firmware_unload_delay = 15000;
-int msm_vidc_thermal_mitigation_disabled = 0x0;
 
 struct debug_buffer {
 	char ptr[MAX_DBG_BUF_SIZE];
@@ -72,13 +70,13 @@ static ssize_t core_info_read(struct file *file, char __user *buf,
 	struct hfi_device *hdev;
 	int i = 0;
 	if (!core || !core->device) {
-		dprintk(VIDC_ERR, "Invalid params, core: %p\n", core);
+		dprintk(VIDC_ERR, "Invalid params, core: %pK\n", core);
 		return 0;
 	}
 	hdev = core->device;
 	INIT_DBG_BUF(dbg_buf);
 	write_str(&dbg_buf, "===============================\n");
-	write_str(&dbg_buf, "CORE %d: 0x%p\n", core->id, core);
+	write_str(&dbg_buf, "CORE %d: 0x%pK\n", core->id, core);
 	write_str(&dbg_buf, "===============================\n");
 	write_str(&dbg_buf, "state: %d\n", core->state);
 	write_str(&dbg_buf, "base addr: 0x%x\n",
@@ -162,14 +160,9 @@ struct dentry *msm_vidc_debugfs_init_drv(void)
 		dprintk(VIDC_WARN, "debugfs_create_file fw_coverage: fail\n");
 		goto failed_create_dir;
 	}
-	if (!debugfs_create_u32("dcvs_dec_mode", S_IRUGO | S_IWUSR,
-			dir, &msm_vidc_dec_dcvs_mode)) {
-		dprintk(VIDC_WARN, "debugfs_create_file dcvs_dec_mode: fail\n");
-		goto failed_create_dir;
-	}
-	if (!debugfs_create_u32("dcvs_enc_mode", S_IRUGO | S_IWUSR,
-			dir, &msm_vidc_enc_dcvs_mode)) {
-		dprintk(VIDC_WARN, "debugfs_create_file dcvs_enc_mode: fail\n");
+	if (!debugfs_create_u32("dcvs_mode", S_IRUGO | S_IWUSR,
+			dir, &msm_vidc_dcvs_mode)) {
+		dprintk(VIDC_WARN, "debugfs_create_file dcvs_mode: fail\n");
 		goto failed_create_dir;
 	}
 	if (!debugfs_create_u32("fw_low_power_mode", S_IRUGO | S_IWUSR,
@@ -204,12 +197,6 @@ struct dentry *msm_vidc_debugfs_init_drv(void)
 			"debugfs_create_file: firmware_unload_delay fail\n");
 		goto failed_create_dir;
 	}
-	if (!debugfs_create_u32("disable_thermal_mitigation", S_IRUGO | S_IWUSR,
-			dir, &msm_vidc_thermal_mitigation_disabled)) {
-		dprintk(VIDC_ERR,
-			"debugfs_create_file: disable_thermal_mitigation fail\n");
-		goto failed_create_dir;
-	}
 	return dir;
 
 failed_create_dir:
@@ -225,7 +212,7 @@ struct dentry *msm_vidc_debugfs_init_core(struct msm_vidc_core *core,
 	struct dentry *dir = NULL;
 	char debugfs_name[MAX_DEBUGFS_NAME];
 	if (!core) {
-		dprintk(VIDC_ERR, "Invalid params, core: %p\n", core);
+		dprintk(VIDC_ERR, "Invalid params, core: %pK\n", core);
 		goto failed_create_dir;
 	}
 
@@ -289,15 +276,15 @@ static ssize_t inst_info_read(struct file *file, char __user *buf,
 	struct msm_vidc_inst *inst = file->private_data;
 	int i, j;
 	if (!inst) {
-		dprintk(VIDC_ERR, "Invalid params, core: %p\n", inst);
+		dprintk(VIDC_ERR, "Invalid params, core: %pK\n", inst);
 		return 0;
 	}
 	INIT_DBG_BUF(dbg_buf);
 	write_str(&dbg_buf, "===============================\n");
-	write_str(&dbg_buf, "INSTANCE: 0x%p (%s)\n", inst,
+	write_str(&dbg_buf, "INSTANCE: 0x%pK (%s)\n", inst,
 		inst->session_type == MSM_VIDC_ENCODER ? "Encoder" : "Decoder");
 	write_str(&dbg_buf, "===============================\n");
-	write_str(&dbg_buf, "core: 0x%p\n", inst->core);
+	write_str(&dbg_buf, "core: 0x%pK\n", inst->core);
 	write_str(&dbg_buf, "height: %d\n", inst->prop.height[CAPTURE_PORT]);
 	write_str(&dbg_buf, "width: %d\n", inst->prop.width[CAPTURE_PORT]);
 	write_str(&dbg_buf, "fps: %d\n", inst->prop.fps);
@@ -364,10 +351,10 @@ struct dentry *msm_vidc_debugfs_init_inst(struct msm_vidc_inst *inst,
 	struct dentry *dir = NULL;
 	char debugfs_name[MAX_DEBUGFS_NAME];
 	if (!inst) {
-		dprintk(VIDC_ERR, "Invalid params, inst: %p\n", inst);
+		dprintk(VIDC_ERR, "Invalid params, inst: %pK\n", inst);
 		goto failed_create_dir;
 	}
-	snprintf(debugfs_name, MAX_DEBUGFS_NAME, "inst_%p", inst);
+	snprintf(debugfs_name, MAX_DEBUGFS_NAME, "inst_%pK", inst);
 	dir = debugfs_create_dir(debugfs_name, parent);
 	if (!dir) {
 		dprintk(VIDC_ERR, "Failed to create debugfs for msm_vidc\n");
@@ -389,18 +376,14 @@ void msm_vidc_debugfs_update(struct msm_vidc_inst *inst,
 	char a[64] = "Frame processing";
 	switch (e) {
 	case MSM_VIDC_DEBUGFS_EVENT_ETB:
-		mutex_lock(&inst->lock);
 		inst->count.etb++;
-		mutex_unlock(&inst->lock);
 		if (inst->count.ebd && inst->count.ftb > inst->count.fbd) {
 			d->pdata[FRAME_PROCESSING].name[0] = '\0';
 			tic(inst, FRAME_PROCESSING, a);
 		}
 	break;
 	case MSM_VIDC_DEBUGFS_EVENT_EBD:
-		mutex_lock(&inst->lock);
 		inst->count.ebd++;
-		mutex_unlock(&inst->lock);
 		if (inst->count.ebd && inst->count.ebd == inst->count.etb) {
 			toc(inst, FRAME_PROCESSING);
 			dprintk(VIDC_PROF, "EBD: FW needs input buffers\n");

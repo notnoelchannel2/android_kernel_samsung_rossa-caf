@@ -96,7 +96,7 @@ struct f_rndis {
 static struct f_rndis *__rndis;
 
 int
-rndis_rx_trigger(bool write)
+rndis_rx_trigger(void)
 {
 	struct f_rndis *rndis = __rndis;
 
@@ -104,8 +104,6 @@ rndis_rx_trigger(bool write)
 		pr_err("can't set rx trigger\n");
 		return -EINVAL;
 	}
-	if (!write)
-		return rndis->port.rx_triggered;
 
 	if (rndis->port.rx_triggered)
 		return 0;
@@ -181,6 +179,40 @@ static struct usb_cdc_acm_descriptor rndis_acm_descriptor = {
 
 	.bmCapabilities =	0x00,
 };
+
+#if defined(CONFIG_USB_RNDIS_VZW_REQ)
+/* In VZW Models size of MTU is fixed using Devguru AVD Descriptor */
+
+struct usb_rndis_mtu_avd_descriptor {
+	__u8	bLength;
+	__u8    bDescriptorType;
+	__u8    bDescriptorSubType;
+
+	__u16   bDAU1_Type;
+	__u16   bDAU1_Length;
+	__u32   bDAU1_Value;
+
+	__u16   bDAU2_Type;
+	__u16   bDAU2_Length;
+	__u8    bDAU2_Value;
+} __attribute__ ((packed));
+
+static struct usb_rndis_mtu_avd_descriptor rndis_avd_descriptor = {
+	.bLength            =   0x10,
+	.bDescriptorType    =   0x24,
+	.bDescriptorSubType =   0x80,
+
+	/* First DAU = MTU Size */
+	.bDAU1_Type         =   0x000A,
+	.bDAU1_Length       =   0x0004,
+	.bDAU1_Value        =   0x00000594,     /* 1428Byte */
+
+	/* Second DAU = Rndis version */
+	.bDAU2_Type         =   0x000B,
+	.bDAU2_Length       =   0x0001,
+	.bDAU2_Value        =   0x01,           /* Rndis5.1 */
+};
+#endif
 
 static struct usb_cdc_union_desc rndis_union_desc = {
 	.bLength =		sizeof(rndis_union_desc),
@@ -261,6 +293,9 @@ static struct usb_descriptor_header *eth_fs_function[] = {
 	(struct usb_descriptor_header *) &rndis_data_intf,
 	(struct usb_descriptor_header *) &fs_in_desc,
 	(struct usb_descriptor_header *) &fs_out_desc,
+#if defined(CONFIG_USB_RNDIS_VZW_REQ)
+	(struct usb_descriptor_header *) &rndis_avd_descriptor,
+#endif
 	NULL,
 };
 
@@ -309,6 +344,9 @@ static struct usb_descriptor_header *eth_hs_function[] = {
 	(struct usb_descriptor_header *) &rndis_data_intf,
 	(struct usb_descriptor_header *) &hs_in_desc,
 	(struct usb_descriptor_header *) &hs_out_desc,
+#if defined(CONFIG_USB_RNDIS_VZW_REQ)
+	(struct usb_descriptor_header *) &rndis_avd_descriptor,
+#endif
 	NULL,
 };
 
@@ -379,6 +417,9 @@ static struct usb_descriptor_header *eth_ss_function[] = {
 	(struct usb_descriptor_header *) &ss_bulk_comp_desc,
 	(struct usb_descriptor_header *) &ss_out_desc,
 	(struct usb_descriptor_header *) &ss_bulk_comp_desc,
+#if defined(CONFIG_USB_RNDIS_VZW_REQ)
+	(struct usb_descriptor_header *) &rndis_avd_descriptor,
+#endif
 	NULL,
 };
 
@@ -450,8 +491,6 @@ static void rndis_response_available(void *_rndis)
 	if (atomic_inc_return(&rndis->notify_count) != 1)
 		return;
 
-	if (!rndis->notify->driver_data)
-		return;
 	/* Send RNDIS RESPONSE_AVAILABLE notification; a
 	 * USB_CDC_NOTIFY_RESPONSE_AVAILABLE "should" work too
 	 *
@@ -511,6 +550,7 @@ static void rndis_response_complete(struct usb_ep *ep, struct usb_request *req)
 	}
 }
 
+#define MAX_PKTS_PER_XFER	10
 static void rndis_command_complete(struct usb_ep *ep, struct usb_request *req)
 {
 	struct f_rndis			*rndis = req->context;
@@ -542,7 +582,7 @@ static void rndis_command_complete(struct usb_ep *ep, struct usb_request *req)
 			 * together too quickly. However, module param
 			 * is not honored.
 			 */
-			rndis->port.dl_max_pkts_per_xfer = 3;
+			rndis->port.dl_max_pkts_per_xfer = 5;
 
 			gether_update_dl_max_pkts_per_xfer(&rndis->port,
 					 rndis->port.dl_max_pkts_per_xfer);
@@ -698,8 +738,7 @@ static int rndis_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 		 */
 		rndis->port.cdc_filter = 0;
 
-		DBG(cdev, "RNDIS RX/TX early activation ...\n");
-		gether_enable_sg(&rndis->port, true);
+		DBG(cdev, "RNDIS RX/TX early activation ... \n");
 		net = gether_connect(&rndis->port);
 		if (IS_ERR(net))
 			return PTR_ERR(net);

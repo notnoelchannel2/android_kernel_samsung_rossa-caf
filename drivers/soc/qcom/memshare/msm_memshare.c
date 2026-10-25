@@ -212,7 +212,7 @@ static int modem_notifier_cb(struct notifier_block *this, unsigned long code,
 
 	switch (code) {
 
-	case SUBSYS_AFTER_POWERUP:
+	case SUBSYS_AFTER_SHUTDOWN:
 		pr_err("memshare: Modem Restart has happened\n");
 		free_mem_clients(DHMS_MEM_PROC_MPSS_V01);
 		break;
@@ -325,6 +325,8 @@ static int handle_alloc_generic_req(void *req_h, void *req)
 	rc = qmi_send_resp_from_cb(mem_share_svc_handle, curr_conn, req_h,
 			&mem_share_svc_alloc_generic_resp_desc, alloc_resp,
 			sizeof(alloc_resp));
+
+	kfree(alloc_resp);
 
 	if (rc < 0)
 		pr_err("In %s, Error sending the alloc request: %d\n",
@@ -730,7 +732,7 @@ static struct of_device_id memshare_match_table[] = {
 
 static struct of_device_id memshare_match_table1[] = {
 	{
-		.compatible = "qcom,memshare-peripheral",
+		.compatible = "memshare,peripheral",
 	},
 	{}
 };

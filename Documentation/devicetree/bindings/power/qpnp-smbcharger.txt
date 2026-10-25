@@ -112,12 +112,6 @@ Optional Properties:
 - qcom,float-voltage-mv		Float Voltage in mV - the maximum voltage up
 				to which the battery is charged. Supported
 				range 3600mV to 4500mV
-- qcom,float-voltage-comp	Specifies the JEITA float voltage compensation.
-				Value ranges from 0 to 63.
-- qcom,fastchg-current-ma	Specifies the fast charge current in mA. Supported
-				range is from 300mA to 3000mA.
-- qcom,fastchg-current-comp	Specifies the fast charge current compensation in
-				mA. Supported values are 250, 700, 900 and 1200mA.
 - qcom,charging-timeout-mins	Maximum duration in minutes that a single
 				charge cycle may last.  Supported values are:
 				0, 192, 384, 768, and 1536.  A value of 0
@@ -131,33 +125,10 @@ Optional Properties:
 				the qcom,charging-timeout-mins property must
 				be specified in order for this to take effect.
 - qcom,dc-psy-type		The type of charger connected to the DC path.
-				Can be "Mains", "Wireless" or "Wipower"
+				Can be "Mains" or "Wireless"
 - qcom,dc-psy-ma		The current in mA dc path can support. Must be
 				specified if dc-psy-type is specified. Valid
 				range 300mA to 2000mA.
-- qcom,dcin-vadc		The phandle to pmi8994 voltage adc. The ADC is
-				used to get notifications when the DCIN voltage
-				crosses a programmed min/max threshold. This is
-				used to make configurations for optimized power
-				draw for Wipower.
-- qcom,wipower-div2-ilim-map
-- qcom,wipower-pt-ilim-map
-- qcom,wipower-default-ilim-map
-				Array of 5 elements to indicate the voltage ranges and their corresponding
-				current limits. The 5 elements with index [0..4] are:
-				[0] => voltage_low in uV
-				[1] => voltage_high in uV
-				[2] => current limit for pass through in mA
-				[3] => current limit for div2 mode dcin low voltage in mA
-				[4] => current limit for div2 mode dcin high voltage in mA
-				The div2 and pt tables indicate the current limits
-				to use when Wipower is operating in divide_by_2 mode
-				and pass through mode respectively.
-				The default table is used when the voltage ranges
-				are beyond the ones specified in the mapping table.
-				Note that if dcin-vadc or any of these mapping
-				tables are not specified, dynamic dcin input
-				is disabled.
 - qcom,charging-disabled	Set this if charging should be disabled in the
 				build by default.
 - qcom,resume-delta-mv		Specifies the minimum voltage drop in
@@ -165,9 +136,6 @@ Optional Properties:
 				required in order to initiate a new charging
 				cycle. Supported values are: 50, 100, 200 and
 				300mV.
-- qcom,chg-inhibit-en		Boolean that indicates whether the charge inhibit
-				feature needs to be enabled. If this is not set,
-				charge inhibit feature is disabled by default.
 - qcom,chg-inhibit-fg		Indicates if the recharge threshold source has
 				to be Fuel gauge ADC. If this is not set, it
 				will be analog sensor by default.
@@ -209,10 +177,6 @@ Optional Properties:
 				the line from the battery connectors through
 				vph_power. This is used to calculate maximum
 				available current of the battery.
-- qcom,autoadjust-vfloat	A boolean property that when set, makes the
-				driver automatically readjust vfloat using the
-				fuel gauge ADC readings to make charging more
-				accurate.
 - qcom,soft-vfloat-comp-disabled	Set this property when the battery is
 					powered via external source and could
 					go above the float voltage.

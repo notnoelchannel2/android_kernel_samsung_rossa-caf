@@ -48,6 +48,7 @@
 #include <asm/irq.h>
 #include <asm/exception.h>
 #include <asm/smp_plat.h>
+#include <linux/wakeup_reason.h>
 
 #include "irqchip.h"
 
@@ -82,7 +83,6 @@ struct gic_chip_data {
 static DEFINE_RAW_SPINLOCK(irq_controller_lock);
 
 #ifdef CONFIG_CPU_PM
-static bool skip_cluster_collapse_activites;
 static unsigned int saved_dist_ctrl, saved_cpu_ctrl;
 #endif
 
@@ -287,18 +287,12 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 	raw_spin_unlock(&irq_controller_lock);
 
 	for (i = find_first_bit((unsigned long *)pending, gic->gic_irqs);
-	i < gic->gic_irqs;
-	i = find_next_bit((unsigned long *)pending, gic->gic_irqs, i+1)) {
-		struct irq_desc *desc = irq_to_desc(i + gic->irq_offset);
-		const char *name = "null";
-
-		if (desc == NULL)
-			name = "stray irq";
-		else if (desc->action && desc->action->name)
-			name = desc->action->name;
-
-		pr_warning("%s: %d triggered %s\n", __func__,
-					i + gic->irq_offset, name);
+		i < gic->gic_irqs;
+		i = find_next_bit((unsigned long *)pending, gic->gic_irqs, i+1)) {
+#ifdef CONFIG_SEC_PM_DEBUG
+			log_wakeup_reason(i + gic->irq_offset);
+			update_wakeup_reason_stats(i + gic->irq_offset);
+#endif
 	}
 }
 
@@ -858,7 +852,7 @@ static void __init gic_pm_init(struct gic_chip_data *gic)
 		sizeof(u32));
 	BUG_ON(!gic->saved_ppi_conf);
 
-	if (gic == &gic_data[0] && !skip_cluster_collapse_activites)
+	if (gic == &gic_data[0])
 		cpu_pm_register_notifier(&gic_notifier_block);
 }
 #else
@@ -1112,16 +1106,9 @@ int __init gic_of_init(struct device_node *node, struct device_node *parent)
 	gic_cnt++;
 	return 0;
 }
-
-int __init msm_gic_of_init(struct device_node *node, struct device_node *parent)
-{
-	skip_cluster_collapse_activites = true;
-	return gic_of_init(node, parent);
-}
-
 IRQCHIP_DECLARE(cortex_a15_gic, "arm,cortex-a15-gic", gic_of_init);
 IRQCHIP_DECLARE(cortex_a9_gic, "arm,cortex-a9-gic", gic_of_init);
 IRQCHIP_DECLARE(msm_8660_qgic, "qcom,msm-8660-qgic", gic_of_init);
-IRQCHIP_DECLARE(msm_qgic2, "qcom,msm-qgic2", msm_gic_of_init);
+IRQCHIP_DECLARE(msm_qgic2, "qcom,msm-qgic2", gic_of_init);
 
 #endif

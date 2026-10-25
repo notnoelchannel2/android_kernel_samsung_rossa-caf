@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -144,12 +144,11 @@ static int emac_set_settings(struct net_device *netdev,
 	u32 advertised, old;
 	int retval = 0;
 	bool autoneg;
-	bool if_running = netif_running(adpt->netdev);
 
 	emac_info(adpt, link, "ethtool cmd autoneg %d, speed %d, duplex %d\n",
 		  ecmd->autoneg, ecmd->speed, ecmd->duplex);
 
-	while (TEST_N_SET_FLAG(adpt, ADPT_STATE_RESETTING))
+	while (CHK_AND_SET_ADPT_FLAG(STATE_RESETTING))
 		msleep(20); /* Reset might take few 10s of ms */
 
 	old = hw->autoneg_advertised;
@@ -164,7 +163,7 @@ static int emac_set_settings(struct net_device *netdev,
 			if (ecmd->duplex != DUPLEX_FULL) {
 				emac_warn(adpt, hw,
 					  "1000M half is invalid\n");
-				CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+				CLI_ADPT_FLAG(STATE_RESETTING);
 				return -EINVAL;
 			}
 			advertised = EMAC_LINK_SPEED_1GB_FULL;
@@ -184,13 +183,6 @@ static int emac_set_settings(struct net_device *netdev,
 	if ((hw->autoneg == autoneg) && (hw->autoneg_advertised == advertised))
 		goto done;
 
-	/* If there is no EPHY, the EMAC internal PHY may get reset in
-	 * emac_setup_phy_link_speed. Reset the MAC to avoid the memory
-	 * corruption.
-	 */
-	if (adpt->no_ephy && if_running)
-		emac_down(adpt, EMAC_HW_CTRL_RESET_MAC);
-
 	retval = emac_setup_phy_link_speed(hw, advertised, autoneg,
 					   !hw->disable_fc_autoneg);
 	if (retval) {
@@ -198,14 +190,19 @@ static int emac_set_settings(struct net_device *netdev,
 					  !hw->disable_fc_autoneg);
 	}
 
-	if (if_running) {
-		/* If there is no EPHY, bring up the interface */
-		if (adpt->no_ephy)
+	if (netif_running(adpt->netdev)) {
+		/* If there is no EPHY, the EMAC internal PHY may get reset in
+		 * emac_setup_phy_link_speed. Reset the MAC to avoid the memory
+		 * corruption.
+		 */
+		if (adpt->no_ephy) {
+			emac_down(adpt, EMAC_HW_CTRL_RESET_MAC);
 			emac_up(adpt);
+		}
 	}
 
 done:
-	CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+	CLI_ADPT_FLAG(STATE_RESETTING);
 	return retval;
 }
 
@@ -239,7 +236,7 @@ static int emac_set_pauseparam(struct net_device *netdev,
 	bool disable_fc_autoneg;
 	int retval = 0;
 
-	while (TEST_N_SET_FLAG(adpt, ADPT_STATE_RESETTING))
+	while (CHK_AND_SET_ADPT_FLAG(STATE_RESETTING))
 		msleep(20); /* Reset might take few 10s of ms */
 
 	req_fc_mode        = hw->req_fc_mode;
@@ -259,7 +256,7 @@ static int emac_set_pauseparam(struct net_device *netdev,
 	else if (!pause->rx_pause && !pause->tx_pause)
 		req_fc_mode = emac_fc_none;
 	else {
-		CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+		CLI_ADPT_FLAG(STATE_RESETTING);
 		return -EINVAL;
 	}
 
@@ -276,7 +273,7 @@ static int emac_set_pauseparam(struct net_device *netdev,
 			emac_hw_config_fc(hw);
 	}
 
-	CLR_FLAG(adpt, ADPT_STATE_RESETTING);
+	CLI_ADPT_FLAG(STATE_RESETTING);
 	return retval;
 }
 

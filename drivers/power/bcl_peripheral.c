@@ -34,8 +34,6 @@
 #define BCL_MONITOR_EN          0x46
 #define BCL_VBAT_VALUE          0x54
 #define BCL_IBAT_VALUE          0x55
-#define BCL_VBAT_CP_VALUE       0x56
-#define BCL_IBAT_CP_VALUE       0x57
 #define BCL_VBAT_MIN            0x58
 #define BCL_IBAT_MAX            0x59
 #define BCL_V_GAIN_BAT          0x60
@@ -48,12 +46,6 @@
 #define BCL_IBAT_MAX_CLR        0x67
 #define BCL_VBAT_TRIP           0x68
 #define BCL_IBAT_TRIP           0x69
-
-
-#define BCL_CONSTANT_NUM        32
-
-
-#define BCL_READ_RETRY_LIMIT    3
 
 #define READ_CONV_FACTOR(_node, _key, _val, _ret, _dest) do { \
 		_ret = of_property_read_u32(_node, _key, &_val); \
@@ -88,6 +80,8 @@ struct bcl_peripheral_data {
 	uint32_t                polling_delay_ms;
 	int (*read_max)         (int *adc_value);
 	int (*clear_max)        (void);
+	int (*disable_interrupt)(void);
+	int (*enable_interrupt) (void);
 };
 
 struct bcl_device {
@@ -150,10 +144,7 @@ static void convert_vbat_to_adc_val(int *val)
 	if (!bcl_perph)
 		return;
 	perph_data = &bcl_perph->param[BCL_PARAM_VOLTAGE];
-	*val = (*val * 100 / (100 + perph_data->gain_factor_num
-		* BCL_CONSTANT_NUM
-		/ perph_data->gain_factor_den))
-		/ perph_data->scaling_factor;
+	*val = *val / perph_data->scaling_factor;
 	return;
 }
 
@@ -165,9 +156,8 @@ static void convert_adc_to_vbat_val(int *val)
 		return;
 	perph_data = &bcl_perph->param[BCL_PARAM_VOLTAGE];
 	*val = (*val * perph_data->scaling_factor)
-		* (100 + perph_data->gain_factor_num
-		* BCL_CONSTANT_NUM  / perph_data->gain_factor_den)
-		/ 100;
+		* (1 + perph_data->gain_factor_num
+		/ perph_data->gain_factor_den);
 	return;
 }
 
@@ -178,11 +168,7 @@ static void convert_ibat_to_adc_val(int *val)
 	if (!bcl_perph)
 		return;
 	perph_data = &bcl_perph->param[BCL_PARAM_CURRENT];
-	*val /= (*val * 100 / (100 + perph_data->gain_factor_num
-		* BCL_CONSTANT_NUM / perph_data->gain_factor_den)
-		- perph_data->offset_factor_num
-		/ perph_data->offset_factor_den)
-		/  perph_data->scaling_factor;
+	*val /= perph_data->scaling_factor;
 	return;
 }
 
@@ -193,11 +179,10 @@ static void convert_adc_to_ibat_val(int *val)
 	if (!bcl_perph)
 		return;
 	perph_data = &bcl_perph->param[BCL_PARAM_CURRENT];
-	*val = (*val * perph_data->scaling_factor
-		+ perph_data->offset_factor_num
-		/ perph_data->offset_factor_den)
-		* (100 + perph_data->gain_factor_num
-		* BCL_CONSTANT_NUM / perph_data->gain_factor_den) / 100;
+	*val = (*val * perph_data->scaling_factor +
+		perph_data->offset_factor_num / perph_data->offset_factor_den)
+		* (1 + perph_data->gain_factor_num
+		/ perph_data->gain_factor_den);
 	return;
 }
 
@@ -256,6 +241,7 @@ static int bcl_set_low_vbat(int thresh_value)
 static int bcl_access_monitor_enable(bool enable)
 {
 	int ret = 0, i = 0;
+	int8_t val = 0;
 	struct bcl_peripheral_data *perph_data = NULL;
 
 	mutex_lock(&bcl_enable_mutex);
@@ -265,14 +251,30 @@ static int bcl_access_monitor_enable(bool enable)
 	for (; i < BCL_PARAM_MAX; i++) {
 		perph_data = &bcl_perph->param[i];
 		if (enable) {
-			enable_irq(perph_data->irq_num);
+			ret = perph_data->enable_interrupt();
+			if (ret) {
+				pr_err("Error enabling itrpt. param:%d err%d\n"
+					, i, ret);
+				goto access_exit;
+			}
 			perph_data->state = BCL_PARAM_MONITOR;
 		} else {
-			disable_irq(perph_data->irq_num);
+			ret = perph_data->disable_interrupt();
+			if (ret) {
+				pr_err("Error disabling itrpt. param:%d err%d\n"
+					, i, ret);
+				goto access_exit;
+			}
 			cancel_delayed_work_sync(&perph_data->poll_work);
 			cancel_work_sync(&perph_data->isr_work);
 			perph_data->state = BCL_PARAM_INACTIVE;
 		}
+	}
+	val = (enable) ? BIT(7) : 0;
+	ret = bcl_write_register(BCL_MONITOR_EN, val);
+	if (ret) {
+		pr_err("Error accessing BCL peripheral. err:%d\n", ret);
+		goto access_exit;
 	}
 	bcl_perph->enabled = enable;
 
@@ -408,25 +410,13 @@ bcl_read_exit:
 
 static int bcl_read_ibat(int *adc_value)
 {
-	int ret = 0, timeout = 0;
-	int8_t val = 0, val_cp = 0;
+	int ret = 0;
+	int8_t val = 0;
 
 	*adc_value = (int)val;
-	do {
-		ret = bcl_read_register(BCL_IBAT_VALUE, &val);
-		if (ret) {
-			pr_err("BCL register read error. err:%d\n", ret);
-			goto bcl_read_exit;
-		}
-		ret = bcl_read_register(BCL_IBAT_CP_VALUE, &val_cp);
-		if (ret) {
-			pr_err("BCL compare register read error. err:%d\n",
-			ret);
-			goto bcl_read_exit;
-		}
-	} while (val != val_cp && timeout++ < BCL_READ_RETRY_LIMIT);
-	if (val != val_cp) {
-		ret = -1;
+	ret = bcl_read_register(BCL_IBAT_VALUE, &val);
+	if (ret) {
+		pr_err("BCL register read error. err:%d\n", ret);
 		goto bcl_read_exit;
 	}
 	*adc_value = (int)val;
@@ -439,25 +429,13 @@ bcl_read_exit:
 
 static int bcl_read_vbat(int *adc_value)
 {
-	int ret = 0, timeout = 0;
-	int8_t val = 0, val_cp = 0;
+	int ret = 0;
+	int8_t val = 0;
 
 	*adc_value = (int)val;
-	do {
-		ret = bcl_read_register(BCL_VBAT_VALUE, &val);
-		if (ret) {
-			pr_err("BCL register read error. err:%d\n", ret);
-			goto bcl_read_exit;
-		}
-		ret = bcl_read_register(BCL_VBAT_CP_VALUE, &val_cp);
-		if (ret) {
-			pr_err("BCL compare register read error. err:%d\n",
-			ret);
-			goto bcl_read_exit;
-		}
-	} while (val != val_cp && timeout++ < BCL_READ_RETRY_LIMIT);
-	if (val != val_cp) {
-		ret = -1;
+	ret = bcl_read_register(BCL_VBAT_VALUE, &val);
+	if (ret) {
+		pr_err("BCL register read error. err:%d\n", ret);
 		goto bcl_read_exit;
 	}
 	*adc_value = (int)val;
@@ -465,6 +443,98 @@ static int bcl_read_vbat(int *adc_value)
 	pr_debug("Read Vbat:%d. ADC_val:%d\n", *adc_value, val);
 
 bcl_read_exit:
+	return ret;
+}
+
+static int bcl_param_enable(enum bcl_monitor_state param, bool enable)
+{
+	int ret = 0;
+	int8_t val = 0;
+
+	ret = bcl_read_register(BCL_INT_EN, &val);
+	if (ret) {
+		pr_err("Error reading interrupt enable register. err:%d", ret);
+		return ret;
+	}
+	if (enable) {
+		if (val & (BIT(param)))
+			return 0;
+		val |= BIT(param);
+	} else {
+		if (!(val & BIT(param)))
+			return 0;
+		val ^= BIT(param);
+	}
+	ret = bcl_write_register(BCL_INT_EN, val);
+	if (ret) {
+		pr_err("Error writing interrupt enable register. err:%d", ret);
+		return ret;
+	}
+
+	return ret;
+}
+
+static int bcl_ibat_disable(void)
+{
+	int ret = 0;
+
+	mutex_lock(&bcl_access_mutex);
+	ret = bcl_param_enable(BCL_PARAM_CURRENT, false);
+	if (ret) {
+		pr_err("Error disabling ibat. err:%d", ret);
+		goto ibat_disable_exit;
+	}
+
+ibat_disable_exit:
+	mutex_unlock(&bcl_access_mutex);
+	return ret;
+}
+
+static int bcl_ibat_enable(void)
+{
+	int ret = 0;
+
+	mutex_lock(&bcl_access_mutex);
+	ret = bcl_param_enable(BCL_PARAM_CURRENT, true);
+	if (ret) {
+		pr_err("Error enabling ibat. err:%d", ret);
+		goto ibat_enable_exit;
+	}
+
+ibat_enable_exit:
+	mutex_unlock(&bcl_access_mutex);
+	return ret;
+}
+
+static int bcl_vbat_disable(void)
+{
+	int ret = 0;
+
+	mutex_lock(&bcl_access_mutex);
+	ret = bcl_param_enable(BCL_PARAM_VOLTAGE, false);
+	if (ret) {
+		pr_err("Error disabling vbat. err:%d", ret);
+		goto vbat_disable_exit;
+	}
+
+vbat_disable_exit:
+	mutex_unlock(&bcl_access_mutex);
+	return ret;
+}
+
+static int bcl_vbat_enable(void)
+{
+	int ret = 0;
+
+	mutex_lock(&bcl_access_mutex);
+	ret = bcl_param_enable(BCL_PARAM_VOLTAGE, true);
+	if (ret) {
+		pr_err("Error enabling vbat. err:%d", ret);
+		goto vbat_enable_exit;
+	}
+
+vbat_enable_exit:
+	mutex_unlock(&bcl_access_mutex);
 	return ret;
 }
 
@@ -489,7 +559,7 @@ static void bcl_poll_ibat_low(struct work_struct *work)
 		perph_data->ops.notify(perph_data->param_data, val,
 			BCL_LOW_TRIP);
 		perph_data->state = BCL_PARAM_MONITOR;
-		enable_irq(perph_data->irq_num);
+		perph_data->enable_interrupt();
 	} else {
 		goto reschedule_ibat;
 	}
@@ -522,7 +592,7 @@ static void bcl_poll_vbat_high(struct work_struct *work)
 		perph_data->ops.notify(perph_data->param_data, val,
 			BCL_HIGH_TRIP);
 		perph_data->state = BCL_PARAM_MONITOR;
-		enable_irq(perph_data->irq_num);
+		perph_data->enable_interrupt();
 	} else {
 		goto reschedule_vbat;
 	}
@@ -544,7 +614,7 @@ static void bcl_handle_ibat(struct work_struct *work)
 		pr_err("Invalid state %d\n", perph_data->state);
 		return;
 	}
-	disable_irq(perph_data->irq_num);
+	perph_data->disable_interrupt();
 	perph_data->state = BCL_PARAM_POLLING;
 	ret = perph_data->read_max(&val);
 	if (ret)
@@ -570,7 +640,7 @@ static void bcl_handle_vbat(struct work_struct *work)
 		pr_err("Invalid state %d\n", perph_data->state);
 		return;
 	}
-	disable_irq(perph_data->irq_num);
+	perph_data->disable_interrupt();
 	perph_data->state = BCL_PARAM_POLLING;
 	ret = perph_data->read_max(&val);
 	if (ret)
@@ -715,6 +785,10 @@ static int bcl_update_data(void)
 		 = bcl_monitor_enable;
 	bcl_perph->param[BCL_PARAM_VOLTAGE].ops.disable
 		= bcl_monitor_disable;
+	bcl_perph->param[BCL_PARAM_VOLTAGE].disable_interrupt
+		= bcl_vbat_disable;
+	bcl_perph->param[BCL_PARAM_VOLTAGE].enable_interrupt
+		 = bcl_vbat_enable;
 	bcl_perph->param[BCL_PARAM_VOLTAGE].read_max
 		 = bcl_read_vbat_min;
 	bcl_perph->param[BCL_PARAM_VOLTAGE].clear_max
@@ -733,6 +807,10 @@ static int bcl_update_data(void)
 		= bcl_monitor_enable;
 	bcl_perph->param[BCL_PARAM_CURRENT].ops.disable
 		= bcl_monitor_disable;
+	bcl_perph->param[BCL_PARAM_CURRENT].disable_interrupt
+		= bcl_ibat_disable;
+	bcl_perph->param[BCL_PARAM_CURRENT].enable_interrupt
+		= bcl_ibat_enable;
 	bcl_perph->param[BCL_PARAM_CURRENT].read_max
 		= bcl_read_ibat_max;
 	bcl_perph->param[BCL_PARAM_CURRENT].clear_max
@@ -828,11 +906,6 @@ static int bcl_probe(struct spmi_device *spmi)
 	ret = bcl_monitor_disable();
 	if (ret) {
 		pr_err("Error disabling BCL. err:%d", ret);
-		goto bcl_probe_exit;
-	}
-	ret = bcl_write_register(BCL_MONITOR_EN, BIT(7));
-	if (ret) {
-		pr_err("Error accessing BCL peripheral. err:%d\n", ret);
 		goto bcl_probe_exit;
 	}
 

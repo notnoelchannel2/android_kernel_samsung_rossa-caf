@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -39,8 +39,15 @@
 #include <asm/uaccess.h>
 #include <asm/setup.h>
 #include <asm-generic/io-64-nonatomic-lo-hi.h>
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/sec_debug.h>
+#endif
 
 #include "peripheral-loader.h"
+
+#ifdef CONFIG_SEC_PERIPHERAL_SECURE_CHK
+#include <linux/sec_debug.h>
+#endif
 
 #define pil_err(desc, fmt, ...)						\
 	dev_err(desc->dev, "%s: " fmt, desc->name, ##__VA_ARGS__)
@@ -381,6 +388,11 @@ static int pil_alloc_region(struct pil_priv *priv, phys_addr_t min_addr,
 	if (region == NULL) {
 		pil_err(priv->desc, "Failed to allocate relocatable region of size %zx\n",
 					size);
+		/*Need ramdump on exact alloc failure case for venus*/
+#ifdef CONFIG_SEC_DEBUG
+		if (sec_debug_is_enabled())
+#endif
+			BUG_ON(!strcmp(priv->desc->name, "venus"));
 		return -ENOMEM;
 	}
 
@@ -556,7 +568,7 @@ static int pil_load_seg(struct pil_desc *desc, struct pil_seg *seg)
 
 	if (seg->filesz) {
 		snprintf(fw_name, ARRAY_SIZE(fw_name), "%s.b%02d",
-				desc->fw_name, num);
+				desc->name, num);
 		ret = request_firmware_direct(fw_name, desc->dev, seg->paddr,
 					      seg->filesz, desc->map_fw_mem,
 					      desc->unmap_fw_mem, map_data);
@@ -652,15 +664,15 @@ int pil_boot(struct pil_desc *desc)
 	struct pil_seg *seg;
 	const struct firmware *fw;
 	struct pil_priv *priv = desc->priv;
-
-	if (desc->shutdown_fail)
-		pil_err(desc, "Subsystem shutdown failed previously!\n");
+#ifdef CONFIG_SEC_PERIPHERAL_SECURE_CHK
+	static int load_count_fwd;
+#endif
 
 	/* Reinitialize for new image */
 	pil_release_mmap(desc);
 
 	down_read(&pil_pm_rwsem);
-	snprintf(fw_name, sizeof(fw_name), "%s.mdt", desc->fw_name);
+	snprintf(fw_name, sizeof(fw_name), "%s.mdt", desc->name);
 	ret = request_firmware(&fw, fw_name, desc->dev);
 	if (ret) {
 		pil_err(desc, "Failed to locate %s\n", fw_name);
@@ -711,6 +723,16 @@ int pil_boot(struct pil_desc *desc)
 		ret = desc->ops->init_image(desc, fw->data, fw->size);
 	if (ret) {
 		pil_err(desc, "Invalid firmware metadata\n");
+#ifdef CONFIG_SEC_PERIPHERAL_SECURE_CHK
+		if ((!strcmp(desc->name, "mba")) || (!strcmp(desc->name, "modem"))) {
+			if (++load_count_fwd > 5) {
+				release_firmware(fw);
+				up_read(&pil_pm_rwsem);
+				pil_release_mmap(desc);
+				sec_peripheral_secure_check_fail();
+			}
+		}
+#endif
 		goto err_boot;
 	}
 
@@ -731,6 +753,15 @@ int pil_boot(struct pil_desc *desc)
 	ret = desc->ops->auth_and_reset(desc);
 	if (ret) {
 		pil_err(desc, "Failed to bring out of reset\n");
+#ifdef CONFIG_SEC_PERIPHERAL_SECURE_CHK
+		if ((!strcmp(desc->name, "mba")) || (!strcmp(desc->name, "modem"))) {
+			pil_proxy_unvote(desc, ret);
+			release_firmware(fw);
+			up_read(&pil_pm_rwsem);
+			pil_release_mmap(desc);
+			sec_peripheral_secure_check_fail();
+		}
+#endif
 		goto err_deinit_image;
 	}
 	pil_info(desc, "Brought out of reset\n");
@@ -766,12 +797,8 @@ void pil_shutdown(struct pil_desc *desc)
 {
 	struct pil_priv *priv = desc->priv;
 
-	if (desc->ops->shutdown) {
-		if (desc->ops->shutdown(desc))
-			desc->shutdown_fail = true;
-		else
-			desc->shutdown_fail = false;
-	}
+	if (desc->ops->shutdown)
+		desc->ops->shutdown(desc);
 
 	if (desc->proxy_unvote_irq) {
 		disable_irq(desc->proxy_unvote_irq);

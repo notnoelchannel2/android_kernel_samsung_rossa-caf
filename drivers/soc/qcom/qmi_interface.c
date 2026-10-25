@@ -742,6 +742,8 @@ static void clean_txn_info(struct qmi_handle *handle)
 
 int qmi_handle_destroy(struct qmi_handle *handle)
 {
+	int rc;
+
 	if (!handle)
 		return -EINVAL;
 
@@ -757,9 +759,8 @@ int qmi_handle_destroy(struct qmi_handle *handle)
 	mutex_unlock(&handle->handle_lock);
 	flush_workqueue(handle->handle_wq);
 	destroy_workqueue(handle->handle_wq);
-	wait_event(handle->reset_waitq,
-		   (list_empty(&handle->txn_list) &&
-		    list_empty(&handle->pending_txn_list)));
+	rc = wait_event_interruptible(handle->reset_waitq,
+				      list_empty(&handle->txn_list));
 
 	kfree(handle->dest_info);
 	kfree(handle);

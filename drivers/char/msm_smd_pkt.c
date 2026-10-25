@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1069,8 +1069,6 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 
 	mutex_lock(&smd_pkt_devp->ch_lock);
 	if (smd_pkt_devp->ch == 0) {
-		unsigned open_wait_rem = smd_pkt_devp->open_modem_wait * 1000;
-
 		INIT_COMPLETION(smd_pkt_devp->ch_allocated);
 
 		r = smd_pkt_add_driver(smd_pkt_devp);
@@ -1092,7 +1090,7 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 				 * retry by user-space modules and to avoid
 				 * possible watchdog bite.
 				 */
-				msleep(open_wait_rem);
+				msleep((smd_pkt_devp->open_modem_wait * 1000));
 				goto release_pd;
 			}
 		}
@@ -1113,19 +1111,14 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 		 * Wait for a packet channel to be allocated so we know
 		 * the modem is ready enough.
 		 */
-		if (open_wait_rem) {
+		if (smd_pkt_devp->open_modem_wait) {
 			r = wait_for_completion_interruptible_timeout(
 				&smd_pkt_devp->ch_allocated,
-				msecs_to_jiffies(open_wait_rem));
-			if (r >= 0)
-				open_wait_rem = jiffies_to_msecs(r);
+				msecs_to_jiffies(
+					smd_pkt_devp->open_modem_wait
+						 * 1000));
 			if (r == 0)
 				r = -ETIMEDOUT;
-			if (r == -ERESTARTSYS) {
-				pr_info_ratelimited("%s: wait on smd_pkt_dev id:%d allocation interrupted\n",
-					__func__, smd_pkt_devp->i);
-				goto release_pil;
-			}
 			if (r < 0) {
 				pr_err_ratelimited("%s: wait on smd_pkt_dev id:%d allocation failed rc:%d\n",
 					__func__, smd_pkt_devp->i, r);
@@ -1144,11 +1137,9 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 			goto release_pil;
 		}
 
-		open_wait_rem = max_t(unsigned, 2000, open_wait_rem);
 		r = wait_event_interruptible_timeout(
 				smd_pkt_devp->ch_opened_wait_queue,
-				smd_pkt_devp->is_open,
-				msecs_to_jiffies(open_wait_rem));
+				smd_pkt_devp->is_open, (2 * HZ));
 		if (r == 0) {
 			r = -ETIMEDOUT;
 			/* close the ch to sync smd's state with smd_pkt */
@@ -1156,10 +1147,7 @@ int smd_pkt_open(struct inode *inode, struct file *file)
 			smd_pkt_devp->ch = NULL;
 		}
 
-		if (r == -ERESTARTSYS) {
-			pr_info_ratelimited("%s: wait on smd_pkt_dev id:%d OPEN interrupted\n",
-				__func__, smd_pkt_devp->i);
-		} else if (r < 0) {
+		if (r < 0) {
 			pr_err_ratelimited("%s: wait on smd_pkt_dev id:%d OPEN event failed rc:%d\n",
 				__func__, smd_pkt_devp->i, r);
 		} else if (!smd_pkt_devp->is_open) {

@@ -18,6 +18,11 @@
 #include <linux/seqlock.h>
 #include <linux/bitops.h>
 
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/sec_debug.h>
+extern void sec_debug_save_last_ns(unsigned long long last_ns);
+#endif
+
 struct clock_data {
 	ktime_t wrap_kt;
 	u64 epoch_ns;
@@ -32,7 +37,6 @@ struct clock_data {
 
 static struct hrtimer sched_clock_timer;
 static int irqtime = -1;
-static int initialized;
 
 core_param(irqtime, irqtime, int, 0400);
 
@@ -71,7 +75,9 @@ static unsigned long long notrace sched_clock_32(void)
 	u64 epoch_cyc;
 	u64 cyc;
 	unsigned long seq;
-
+#ifdef CONFIG_SEC_DEBUG
+		u64 local;
+#endif
 	if (cd.suspended)
 		return cd.epoch_ns;
 
@@ -83,6 +89,11 @@ static unsigned long long notrace sched_clock_32(void)
 
 	cyc = read_sched_clock();
 	cyc = (cyc - epoch_cyc) & sched_clock_mask;
+#ifdef CONFIG_SEC_DEBUG
+	local = epoch_ns + cyc_to_ns(cyc, cd.mult, cd.shift);
+	sec_debug_save_last_ns(local);
+	return local;
+#endif
 	return epoch_ns + cyc_to_ns(cyc, cd.mult, cd.shift);
 }
 
@@ -179,11 +190,6 @@ unsigned long long notrace sched_clock(void)
 	return sched_clock_func();
 }
 
-int sched_clock_initialized(void)
-{
-	return initialized;
-}
-
 void __init sched_clock_postinit(void)
 {
 	/*
@@ -202,8 +208,6 @@ void __init sched_clock_postinit(void)
 	hrtimer_init(&sched_clock_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	sched_clock_timer.function = sched_clock_poll;
 	hrtimer_start(&sched_clock_timer, cd.wrap_kt, HRTIMER_MODE_REL);
-
-	initialized = 1;
 }
 
 static int sched_clock_suspend(void)

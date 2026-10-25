@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2009-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -90,7 +90,7 @@ static ssize_t mdss_debug_base_offset_read(struct file *file,
 {
 	struct mdss_debug_base *dbg = file->private_data;
 	int len = 0;
-	char buf[24];
+	char buf[24] = {'\0'};
 
 	if (!dbg)
 		return -ENODEV;
@@ -99,10 +99,10 @@ static ssize_t mdss_debug_base_offset_read(struct file *file,
 		return 0;	/* the end */
 
 	len = snprintf(buf, sizeof(buf), "0x%08zx %zx\n", dbg->off, dbg->cnt);
-	if (len < 0)
+	if (len < 0 || len >= sizeof(buf))
 		return 0;
 
-	if (copy_to_user(buff, buf, len))
+	if ((count < sizeof(buf)) || copy_to_user(buff, buf, len))
 		return -EFAULT;
 
 	*ppos += len;	/* increase offset */
@@ -233,7 +233,7 @@ static const struct file_operations mdss_reg_fops = {
 };
 
 int mdss_debug_register_base(const char *name, void __iomem *base,
-	size_t max_offset, struct mdss_debug_base **dbg_blk)
+			     size_t max_offset)
 {
 	struct mdss_data_type *mdata = mdss_res;
 	struct mdss_debug_data *mdd;
@@ -241,9 +241,6 @@ int mdss_debug_register_base(const char *name, void __iomem *base,
 	struct dentry *ent_off, *ent_reg;
 	char dn[80] = "";
 	int prefix_len = 0;
-
-	if (dbg_blk)
-		(*dbg_blk) = NULL;
 
 	if (!mdata || !mdata->debug_inf.debug_data)
 		return -ENODEV;
@@ -260,7 +257,6 @@ int mdss_debug_register_base(const char *name, void __iomem *base,
 	dbg->max_offset = max_offset;
 	dbg->off = 0;
 	dbg->cnt = DEFAULT_BASE_REG_CNT;
-	dbg->reg_dump = NULL;
 
 	if (name && strcmp(name, "mdp"))
 		prefix_len = snprintf(dn, sizeof(dn), "%s_", name);
@@ -279,13 +275,7 @@ int mdss_debug_register_base(const char *name, void __iomem *base,
 		goto reg_fail;
 	}
 
-	/* Initialize list to make sure check for null list will be valid */
-	INIT_LIST_HEAD(&dbg->dump_list);
-
 	list_add(&dbg->head, &mdd->base_list);
-
-	if (dbg_blk)
-		(*dbg_blk) = dbg;
 
 	return 0;
 reg_fail:
@@ -293,87 +283,6 @@ reg_fail:
 off_fail:
 	kfree(dbg);
 	return -ENODEV;
-}
-
-static void parse_dump_range_name(struct device_node *node,
-	int total_names, int index, char *range_name, u32 range_size,
-	const char *name_prop)
-{
-	int rc = 0;
-	const char *st = NULL;
-
-	if ((total_names > 0) && (index < total_names)) {
-		rc = of_property_read_string_index(node,
-			name_prop, index, &st);
-		if (rc) {
-			pr_err("%s: error reading name. index=%d, rc=%d\n",
-				__func__, index, rc);
-			goto error;
-		}
-		snprintf(range_name, range_size, "%s", st);
-		return;
-	}
-
-error:
-	snprintf(range_name, range_size, "%s", "<no named range>");
-}
-
-static int parse_dt_xlog_dump_list(const u32 *arr, int count,
-	struct list_head *xlog_dump_list, int total_names,
-	struct platform_device *pdev, const char *name_prop)
-{
-	struct range_dump_node *xlog_node;
-	u32 len;
-	int i;
-
-	for (i = 0, len = count * 2; i < len; i += 2) {
-		xlog_node = kzalloc(sizeof(*xlog_node), GFP_KERNEL);
-		if (!xlog_node)
-			return -ENOMEM;
-
-		xlog_node->offset.start = be32_to_cpu(arr[i]);
-		xlog_node->offset.end = be32_to_cpu(arr[i + 1]);
-		parse_dump_range_name(pdev->dev.of_node, total_names, i/2,
-			xlog_node->range_name,
-			ARRAY_SIZE(xlog_node->range_name), name_prop);
-
-		list_add_tail(&xlog_node->head, xlog_dump_list);
-	}
-
-	return 0;
-}
-
-void mdss_debug_register_dump_range(struct platform_device *pdev,
-	struct mdss_debug_base *blk_base, const char *ranges_prop,
-	const char *name_prop)
-{
-	int total_dump_names, mdp_len;
-	const u32 *mdp_arr;
-
-	if (!blk_base || !ranges_prop || !name_prop)
-		return;
-
-	/* Get the property with the name of the ranges */
-	total_dump_names = of_property_count_strings(pdev->dev.of_node,
-		name_prop);
-	if (total_dump_names < 0) {
-		pr_warn("%s: dump names not found. rc=%d\n", __func__,
-			total_dump_names);
-		total_dump_names = 0;
-	}
-
-	mdp_arr = of_get_property(pdev->dev.of_node, ranges_prop,
-			&mdp_len);
-	if (!mdp_arr) {
-		pr_warn("No xlog range dump found, continue\n");
-		mdp_len = 0;
-	} else {
-		/* 2 is the number of entries per row to calculate the rows */
-		mdp_len /= 2 * sizeof(u32);
-		parse_dt_xlog_dump_list(mdp_arr, mdp_len,
-			&blk_base->dump_list, total_dump_names, pdev,
-				name_prop);
-	}
 }
 
 static ssize_t mdss_debug_factor_write(struct file *file,
@@ -400,11 +309,11 @@ static ssize_t mdss_debug_factor_write(struct file *file,
 
 	if (strnchr(buf, count, '/')) {
 		/* Parsing buf as fraction */
-		if (sscanf(buf, "%d/%d", &numer, &denom) != 2)
+		if (sscanf(buf, "%u/%u", &numer, &denom) != 2)
 			return -EFAULT;
 	} else {
 		/* Parsing buf as percentage */
-		if (sscanf(buf, "%d", &numer) != 1)
+		if (kstrtouint(buf, 0, &numer))
 			return -EFAULT;
 		denom = 100;
 	}
@@ -424,7 +333,7 @@ static ssize_t mdss_debug_factor_read(struct file *file,
 {
 	struct mdss_fudge_factor *factor = file->private_data;
 	int len = 0;
-	char buf[32];
+	char buf[32] = {'\0'};
 
 	if (!factor)
 		return -ENODEV;
@@ -434,10 +343,10 @@ static ssize_t mdss_debug_factor_read(struct file *file,
 
 	len = snprintf(buf, sizeof(buf), "%d/%d\n",
 			factor->numer, factor->denom);
-	if (len < 0)
+	if (len < 0 || len >= sizeof(buf))
 		return 0;
 
-	if (copy_to_user(buff, buf, len))
+	if ((count < sizeof(buf)) || copy_to_user(buff, buf, len))
 		return -EFAULT;
 
 	*ppos += len;	/* increase offset */
@@ -468,6 +377,8 @@ static ssize_t mdss_debug_perf_mode_write(struct file *file,
 	if (copy_from_user(buf, user_buf, count))
 		return -EFAULT;
 
+	buf[count] = 0;		/* end of string */
+
 	if (sscanf(buf, "%d", &perf_mode) != 1)
 		return -EFAULT;
 
@@ -488,7 +399,7 @@ static ssize_t mdss_debug_perf_mode_read(struct file *file,
 {
 	struct mdss_perf_tune *perf_tune = file->private_data;
 	int len = 0;
-	char buf[40];
+	char buf[40] = {'\0'};
 
 	if (!perf_tune)
 		return -ENODEV;
@@ -496,14 +407,12 @@ static ssize_t mdss_debug_perf_mode_read(struct file *file,
 	if (*ppos)
 		return 0;	/* the end */
 
-	buf[count] = 0;
-
 	len = snprintf(buf, sizeof(buf), "min_mdp_clk %lu min_bus_vote %llu\n",
 	perf_tune->min_mdp_clk, perf_tune->min_bus_vote);
-	if (len < 0)
+	if (len < 0 || len >= sizeof(buf))
 		return 0;
 
-	if (copy_to_user(buff, buf, len))
+	if ((count < sizeof(buf)) || copy_to_user(buff, buf, len))
 		return -EFAULT;
 
 	*ppos += len;   /* increase offset */
@@ -523,7 +432,7 @@ static ssize_t mdss_debug_perf_panic_read(struct file *file,
 {
 	struct mdss_data_type *mdata = file->private_data;
 	int len = 0;
-	char buf[40];
+	char buf[40] = {'\0'};
 
 	if (!mdata)
 		return -ENODEV;
@@ -533,10 +442,10 @@ static ssize_t mdss_debug_perf_panic_read(struct file *file,
 
 	len = snprintf(buf, sizeof(buf), "%d\n",
 		!mdata->has_panic_ctrl);
-	if (len < 0)
+	if (len < 0 || len >= sizeof(buf))
 		return 0;
 
-	if (copy_to_user(buff, buf, len))
+	if ((count < sizeof(buf)) || copy_to_user(buff, buf, len))
 		return -EFAULT;
 
 	*ppos += len;   /* increase offset */
@@ -599,8 +508,13 @@ static ssize_t mdss_debug_perf_panic_write(struct file *file,
 	if (!mdata)
 		return -EFAULT;
 
+	if (count >= sizeof(buf))
+		return -EFAULT;
+
 	if (copy_from_user(buf, user_buf, count))
 		return -EFAULT;
+
+	buf[count] = 0; 	/* end of string */
 
 	if (sscanf(buf, "%d", &disable_panic) != 1)
 		return -EFAULT;
@@ -675,6 +589,9 @@ static int mdss_debugfs_perf_init(struct mdss_debug_data *mdd,
 
 	debugfs_create_file("ib_factor_overlap", 0644, mdd->perf,
 		&mdata->ib_factor_overlap, &mdss_factor_fops);
+
+	debugfs_create_file("ib_factor_cmd", 0644, mdd->perf,
+		&mdata->ib_factor_cmd, &mdss_factor_fops);
 
 	debugfs_create_file("clk_factor", 0644, mdd->perf,
 		&mdata->clk_factor, &mdss_factor_fops);
@@ -753,6 +670,29 @@ int mdss_debugfs_remove(struct mdss_data_type *mdata)
 	return 0;
 }
 
+void mdss_dump_reg(char __iomem *base, int len)
+{
+	char *addr;
+	u32 x0, x4, x8, xc;
+	int i;
+
+	addr = base;
+	if (len % 16)
+		len += 16;
+	len /= 16;
+
+	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
+	for (i = 0; i < len; i++) {
+		x0 = readl_relaxed(addr+0x0);
+		x4 = readl_relaxed(addr+0x4);
+		x8 = readl_relaxed(addr+0x8);
+		xc = readl_relaxed(addr+0xc);
+		pr_info("%pK : %08x %08x %08x %08x\n", addr, x0, x4, x8, xc);
+		addr += 16;
+	}
+	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
+}
+
 int vsync_count;
 static struct mdss_mdp_misr_map {
 	u32 ctrl_reg;
@@ -821,7 +761,7 @@ static inline struct mdss_mdp_misr_map *mdss_misr_get_map(u32 block_id,
 	char *ctrl_reg = NULL, *value_reg = NULL;
 	char *intf_base = NULL;
 
-	if (block_id > DISPLAY_MISR_MDP) {
+	if (block_id > DISPLAY_MISR_HDMI && block_id != DISPLAY_MISR_MDP) {
 		pr_err("MISR Block id (%d) out of range\n", block_id);
 		return NULL;
 	}
@@ -867,7 +807,7 @@ static inline struct mdss_mdp_misr_map *mdss_misr_get_map(u32 block_id,
 		return NULL;
 	}
 
-	pr_debug("MISR Module(%d) CTRL(0x%x) SIG(0x%x) intf_base(0x%p)\n",
+	pr_debug("MISR Module(%d) CTRL(0x%x) SIG(0x%x) intf_base(0x%pK)\n",
 			block_id, map->ctrl_reg, map->value_reg, intf_base);
 	return map;
 }
@@ -909,6 +849,11 @@ int mdss_misr_set(struct mdss_data_type *mdata,
 	bool is_valid_wb_mixer = true;
 	bool use_mdp_up_misr = false;
 
+	if (!mdata || !req || !ctl) {
+		pr_err("Invalid input params: mdata = %pK req = %pK ctl = %pK",
+			mdata, req, ctl);
+		return -EINVAL;
+	}
 	map = mdss_misr_get_map(req->block_id, ctl, mdata);
 
 	if (!map) {

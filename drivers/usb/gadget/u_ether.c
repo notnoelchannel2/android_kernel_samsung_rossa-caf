@@ -137,8 +137,6 @@ struct eth_dev {
 	enum ifc_state		state;
 	struct notifier_block	cpufreq_notifier;
 	struct work_struct	cpu_policy_w;
-
-	bool			sg_enabled;
 };
 
 /* when sg is enabled, sg_ctx is used to track skb each usb request will
@@ -550,12 +548,12 @@ static int alloc_requests(struct eth_dev *dev, struct gether *link, unsigned n)
 
 	spin_lock(&dev->req_lock);
 	status = prealloc(&dev->tx_reqs, link->in_ep, n * tx_qmult,
-				dev->sg_enabled,
+				dev->gadget->sg_supported,
 				dev->header_len);
 	if (status < 0)
 		goto fail;
 	status = prealloc(&dev->rx_reqs, link->out_ep, n,
-				dev->sg_enabled,
+				dev->gadget->sg_supported,
 				dev->header_len);
 	if (status < 0)
 		goto fail;
@@ -638,12 +636,34 @@ static void process_rx_w(struct work_struct *work)
 				|| ETH_HLEN > skb->len
 				|| (skb->len > ETH_FRAME_LEN &&
 				test_bit(RMNET_MODE_LLP_ETH, &dev->flags))) {
+#ifdef CONFIG_USB_NCM_SUPPORT_MTU_CHANGE
+		/*
+		  Need to revisit net->mtu  does not include header size incase of changed MTU
+		*/
+			if(!strcmp(dev->port_usb->func.name,"ncm")) {
+				if (status < 0
+					|| ETH_HLEN > skb->len
+					|| skb->len > (dev->net->mtu + ETH_HLEN)) {
+					printk(KERN_ERR "usb: %s  drop incase of NCM rx length %d\n",__func__,skb->len);
+				} else {
+					printk(KERN_ERR "usb: %s  Dont drop incase of NCM rx length %d\n",__func__,skb->len);
+					goto process_frame;
+				}
+			}
+#endif
 			dev->net->stats.rx_errors++;
 			dev->net->stats.rx_length_errors++;
+#ifndef CONFIG_USB_NCM_SUPPORT_MTU_CHANGE
 			DBG(dev, "rx length %d\n", skb->len);
+#else
+			printk(KERN_ERR "usb: %s Drop rx length %d\n",__func__,skb->len);
+#endif
 			dev_kfree_skb_any(skb);
 			continue;
 		}
+#ifdef CONFIG_USB_NCM_SUPPORT_MTU_CHANGE
+process_frame:
+#endif
 		if (test_bit(RMNET_MODE_LLP_IP, &dev->flags))
 			skb->protocol = ether_ip_type_trans(skb, dev->net);
 		else
@@ -772,7 +792,11 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 				retval = usb_ep_queue(in, new_req, GFP_ATOMIC);
 				switch (retval) {
 				default:
+#ifndef CONFIG_USB_NCM_SUPPORT_MTU_CHANGE
 					DBG(dev, "tx queue err %d\n", retval);
+#else
+					printk(KERN_ERR"usb:%s tx queue err %d\n",__func__, retval);
+#endif
 					new_req->length = 0;
 					spin_lock(&dev->req_lock);
 					list_add_tail(&new_req->list,
@@ -1052,7 +1076,7 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 	}
 
 	dev->tx_pkts_rcvd++;
-	if (dev->sg_enabled) {
+	if (dev->gadget->sg_supported) {
 		skb_queue_tail(&dev->tx_skb_q, skb);
 		if (dev->tx_skb_q.qlen > tx_stop_threshold) {
 			dev->tx_throttle++;
@@ -1610,13 +1634,19 @@ struct eth_dev *gether_setup_name(struct usb_gadget *g, u8 ethaddr[ETH_ALEN],
 	if (get_ether_addr(dev_addr, net->dev_addr))
 		dev_warn(&g->dev,
 			"using random %s ethernet address\n", "self");
+#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
+	if (ethaddr != NULL) {
+		memcpy(dev->host_mac, ethaddr, ETH_ALEN);
+		printk(KERN_DEBUG "usb: set unique host mac\n");
+	}
+#else
 	if (get_ether_addr(host_addr, dev->host_mac))
 		dev_warn(&g->dev,
 			"using random %s ethernet address\n", "host");
 
 	if (ethaddr)
 		memcpy(ethaddr, dev->host_mac, ETH_ALEN);
-
+#endif
 	net->netdev_ops = &eth_netdev_ops;
 
 	SET_ETHTOOL_OPS(net, &ops);
@@ -1691,13 +1721,6 @@ void gether_update_dl_max_xfer_size(struct gether *link, uint32_t s)
 	spin_unlock_irqrestore(&dev->lock, flags);
 }
 
-void gether_enable_sg(struct gether *link, bool enable)
-{
-	struct eth_dev		*dev = link->ioport;
-
-	dev->sg_enabled = enable ? dev->gadget->sg_supported : false;
-}
-
 void gether_update_dl_max_pkts_per_xfer(struct gether *link, uint32_t n)
 {
 	struct eth_dev		*dev = link->ioport;
@@ -1739,7 +1762,7 @@ struct net_device *gether_connect(struct gether *link)
 	/* if scatter/gather or sg is supported then headers can be part of
 	 * req->buf which is allocated later
 	 */
-	if (!dev->sg_enabled) {
+	if (!dev->gadget->sg_supported) {
 		link->header = kzalloc(sizeof(struct rndis_packet_msg_type),
 						GFP_ATOMIC);
 		if (!link->header) {
@@ -1863,11 +1886,11 @@ void gether_disconnect(struct gether *link)
 
 		spin_unlock(&dev->req_lock);
 		if (link->multi_pkt_xfer ||
-				dev->sg_enabled) {
+				dev->gadget->sg_supported) {
 			kfree(req->buf);
 			req->buf = NULL;
 		}
-		if (dev->sg_enabled) {
+		if (dev->gadget->sg_supported) {
 			kfree(req->context);
 			kfree(req->sg);
 		}
@@ -1877,7 +1900,7 @@ void gether_disconnect(struct gether *link)
 	}
 
 	/* Free rndis header buffer memory */
-	if (!dev->sg_enabled)
+	if (!dev->gadget->sg_supported)
 		kfree(link->header);
 	link->header = NULL;
 	spin_unlock(&dev->req_lock);

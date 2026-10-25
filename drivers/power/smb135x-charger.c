@@ -281,6 +281,7 @@ enum {
 	USER = BIT(0),
 	THERMAL = BIT(1),
 	CURRENT = BIT(2),
+	SOC = BIT(3),
 };
 
 enum path_type {
@@ -335,7 +336,6 @@ struct smb135x_chg {
 	bool				inhibit_disabled;
 	int				fastchg_current_arr_size;
 	int				*fastchg_current_table;
-	int				fastchg_ma;
 	u8				irq_cfg_mask[3];
 	int				otg_oc_count;
 
@@ -1292,22 +1292,6 @@ static int smb135x_set_appropriate_current(struct smb135x_chg *chip,
 	return rc;
 }
 
-static int smb135x_charging_enable(struct smb135x_chg *chip, int enable)
-{
-	int rc;
-
-	rc = smb135x_masked_write(chip, CMD_CHG_REG,
-				CMD_CHG_EN, enable ? CMD_CHG_EN : 0);
-	if (rc < 0) {
-		dev_err(chip->dev,
-			"Couldn't set CHG_ENABLE_BIT enable = %d rc = %d\n",
-			enable, rc);
-		return rc;
-	}
-
-	return 0;
-}
-
 static int __smb135x_charging(struct smb135x_chg *chip, int enable)
 {
 	int rc = 0;
@@ -1319,11 +1303,13 @@ static int __smb135x_charging(struct smb135x_chg *chip, int enable)
 		return -EINVAL;
 	}
 
-	rc = smb135x_charging_enable(chip, enable);
+
+	rc = smb135x_masked_write(chip, CMD_CHG_REG,
+			CMD_CHG_EN, enable ? CMD_CHG_EN : 0);
 	if (rc < 0) {
 		dev_err(chip->dev,
-			"Couldn't %s charging  rc = %d\n",
-			enable ? "enable" : "disable", rc);
+			"Couldn't set CHG_ENABLE_BIT enable = %d rc = %d\n",
+			enable, rc);
 		return rc;
 	}
 	chip->chg_enabled = enable;
@@ -1461,9 +1447,9 @@ static int smb135x_battery_set_property(struct power_supply *psy,
 		}
 		switch (val->intval) {
 		case POWER_SUPPLY_STATUS_FULL:
-			rc = smb135x_charging_enable(chip, false);
+			rc = smb135x_path_suspend(chip, USB, SOC, true);
 			if (rc < 0) {
-				dev_err(chip->dev, "Couldn't disable charging rc = %d\n",
+				dev_err(chip->dev, "Couldn't set usb suspend rc = %d\n",
 						rc);
 			} else {
 				chip->chg_done_batt_full = true;
@@ -1479,9 +1465,9 @@ static int smb135x_battery_set_property(struct power_supply *psy,
 					chip->chg_done_batt_full);
 			break;
 		case POWER_SUPPLY_STATUS_CHARGING:
-			rc = smb135x_charging_enable(chip, true);
+			rc = smb135x_path_suspend(chip, USB, SOC, false);
 			if (rc < 0) {
-				dev_err(chip->dev, "Couldn't enable charging rc = %d\n",
+				dev_err(chip->dev, "Couldn't disable usb suspend rc = %d\n",
 						rc);
 			} else {
 				chip->chg_done_batt_full = false;
@@ -2397,9 +2383,9 @@ static int recharge_handler(struct smb135x_chg *chip, u8 rt_stat)
 	pr_debug("rt_stat = 0x%02x\n", rt_stat);
 
 	if (chip->bms_controlled_charging) {
-		rc = smb135x_charging_enable(chip, true);
+		rc = smb135x_path_suspend(chip, USB, SOC, false);
 		if (rc < 0)
-			dev_err(chip->dev, "Couldn't enable charging rc = %d\n",
+			dev_err(chip->dev, "Couldn't disable usb suspend rc = %d\n",
 					rc);
 	}
 
@@ -2583,10 +2569,13 @@ static int handle_usb_insertion(struct smb135x_chg *chip)
 			usb_type_name, usb_supply_type, reg);
 	if (chip->usb_psy) {
 		if (chip->bms_controlled_charging) {
-			/* enable charging on USB insertion */
-			rc = smb135x_charging_enable(chip, true);
+			/*
+			 * Disable SOC based USB suspend to enable charging on
+			 * USB insertion.
+			 */
+			rc = smb135x_path_suspend(chip, USB, SOC, false);
 			if (rc < 0)
-				dev_err(chip->dev, "Couldn't enable charging rc = %d\n",
+				dev_err(chip->dev, "Couldn't disable usb suspend rc = %d\n",
 						rc);
 		}
 		pr_debug("setting usb psy type = %d\n", usb_supply_type);
@@ -3463,16 +3452,6 @@ static int smb135x_hw_init(struct smb135x_chg *chip)
 		return rc;
 	}
 
-	/* set maximum fastchg current */
-	if (chip->fastchg_ma != -EINVAL) {
-		rc = smb135x_set_fastchg_current(chip, chip->fastchg_ma);
-		if (rc < 0) {
-			dev_err(chip->dev, "Couldn't set fastchg current = %d\n",
-									rc);
-			return rc;
-		}
-	}
-
 	__smb135x_charging(chip, chip->chg_enabled);
 
 	/* interrupt enabling - active low */
@@ -3665,10 +3644,6 @@ static int smb_parse_dt(struct smb135x_chg *chip)
 						&chip->bms_psy_name);
 	if (rc)
 		chip->bms_psy_name = NULL;
-
-	rc = of_property_read_u32(node, "qcom,fastchg-ma", &chip->fastchg_ma);
-	if (rc < 0)
-		chip->fastchg_ma = -EINVAL;
 
 	chip->soft_vfloat_comp_disabled = of_property_read_bool(node,
 					"qcom,soft-vfloat-comp-disabled");

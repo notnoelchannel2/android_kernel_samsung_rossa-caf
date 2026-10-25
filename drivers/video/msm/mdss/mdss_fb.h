@@ -84,26 +84,28 @@ enum mdp_notify_event {
 /**
  * enum mdp_split_mode - Lists the possible split modes in the device
  *
- * @MDP_SPLIT_MODE_NONE: Single physical display with single ctl path
- *                       and single layer mixer.
- *                       i.e. 1080p single DSI with single LM.
- * #MDP_DUAL_LM_SINGLE_DISPLAY: Single physical display with signle ctl
- *                              path but two layer mixers.
- *                              i.e. WQXGA eDP or 4K HDMI primary or 1080p
- *                                   single DSI with split LM to reduce power.
- * @MDP_DUAL_LM_DUAL_DISPLAY: Two physically separate displays with two
- *                            separate but synchronized ctl paths. Each ctl
- *                            path with its own layer mixer.
- *                            i.e. 1440x2560 with two DSI interfaces.
- * @MDP_PINGPONG_SPLIT: Two physically separate display but single ctl path with
- *                      single layer mixer. Data is split at pingpong module.
- *                      i.e. 1440x2560 on chipsets with single DSI interface.
+ * @MDP_SPLIT_MODE_NONE: Not a Dual display, no panel split.
+ * @MDP_SPLIT_MODE_LM:   Dual Display is true, Split across layer mixers
+ * @MDP_SPLIT_MODE_DST:  Dual Display is true, Split is in the Destination
+ *                      i.e ping pong split.
  */
 enum mdp_split_mode {
 	MDP_SPLIT_MODE_NONE,
-	MDP_DUAL_LM_SINGLE_DISPLAY,
-	MDP_DUAL_LM_DUAL_DISPLAY,
-	MDP_PINGPONG_SPLIT,
+	MDP_SPLIT_MODE_LM,
+	MDP_SPLIT_MODE_DST,
+};
+
+/**
+ * enum mdp_mmap_type - Lists the possible mmap type in the device
+ *
+ * @MDP_FB_MMAP_NONE: Unknown type.
+ * @MDP_FB_MMAP_ION_ALLOC:   Use ION allocate a buffer for mmap
+ * @MDP_FB_MMAP_PHYSICAL_ALLOC:  Use physical buffer for mmap
+ */
+enum mdp_mmap_type {
+	MDP_FB_MMAP_NONE,
+	MDP_FB_MMAP_ION_ALLOC,
+	MDP_FB_MMAP_PHYSICAL_ALLOC,
 };
 
 struct disp_info_type_suspend {
@@ -163,9 +165,8 @@ struct msm_mdp_interface {
 	int (*lut_update)(struct msm_fb_data_type *mfd, struct fb_cmap *cmap);
 	int (*do_histogram)(struct msm_fb_data_type *mfd,
 				struct mdp_histogram *hist);
-	int (*ad_invalidate_input)(struct msm_fb_data_type *mfd);
 	int (*ad_calc_bl)(struct msm_fb_data_type *mfd, int bl_in,
-		int *bl_out, int *ad_bl_out);
+		int *bl_out, bool *bl_out_notify);
 	int (*panel_register_done)(struct mdss_panel_data *pdata);
 	u32 (*fb_stride)(u32 fb_index, u32 xres, int bpp);
 	int (*splash_init_fnc)(struct msm_fb_data_type *mfd);
@@ -284,6 +285,9 @@ struct msm_fb_data_type {
 
 	u32 wait_for_kickoff;
 	u32 thermal_level;
+	int doze_mode;
+
+	int fb_mmap_type;
 };
 
 static inline void mdss_fb_update_notify_update(struct msm_fb_data_type *mfd)
@@ -305,24 +309,20 @@ static inline void mdss_fb_update_notify_update(struct msm_fb_data_type *mfd)
 	}
 }
 
-/* Function returns true for either any kind of dual display */
+/* Function returns true for either Layer Mixer split or Ping pong split */
 static inline bool is_panel_split(struct msm_fb_data_type *mfd)
 {
-	return mfd &&
-	       (mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY ||
-		mfd->split_mode == MDP_PINGPONG_SPLIT);
+	return (mfd && (!(mfd->split_mode == MDP_SPLIT_MODE_NONE)));
 }
-/* Function returns true, if Layer Mixer split is Set */
+/* Function returns true, if Layer Mixer split is Set*/
 static inline bool is_split_lm(struct msm_fb_data_type *mfd)
 {
-	return mfd &&
-	       (mfd->split_mode == MDP_DUAL_LM_DUAL_DISPLAY ||
-		mfd->split_mode == MDP_DUAL_LM_SINGLE_DISPLAY);
+	return (mfd && (mfd->split_mode == MDP_SPLIT_MODE_LM));
 }
 /* Function returns true, if Ping pong split is Set*/
-static inline bool is_pingpong_split(struct msm_fb_data_type *mfd)
+static inline bool is_split_dst(struct msm_fb_data_type *mfd)
 {
-	return mfd && (mfd->split_mode == MDP_PINGPONG_SPLIT);
+	return (mfd && (mfd->split_mode == MDP_SPLIT_MODE_DST));
 }
 
 static inline bool mdss_fb_is_power_off(struct msm_fb_data_type *mfd)
@@ -366,4 +366,8 @@ int mdss_fb_do_ioctl(struct fb_info *info, unsigned int cmd,
 		     unsigned long arg);
 int mdss_fb_compat_ioctl(struct fb_info *info, unsigned int cmd,
 			 unsigned long arg);
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+extern u8 csc_update;
+extern u8 csc_change;
+#endif
 #endif /* MDSS_FB_H */

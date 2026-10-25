@@ -1389,8 +1389,8 @@ static int fwu_start_reflash(void)
 			dev_err(rmi4_data->pdev->dev.parent,
 					"%s: Firmware image %s not available\n",
 					__func__, fwu->image_name);
-			rmi4_data->stay_awake = false;
-			return retval;
+			retval = -EINVAL;
+			goto exit;
 		}
 
 		dev_dbg(rmi4_data->pdev->dev.parent,

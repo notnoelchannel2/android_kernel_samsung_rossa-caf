@@ -153,37 +153,39 @@ static void dwc3_core_and_phy_soft_reset(struct dwc3 *dwc)
 	reg |= DWC3_GUSB3PIPECTL_PHYSOFTRST;
 	dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(0), reg);
 
-	usleep_range(1000, 1200);
+	msleep(100);
 
 	/* Clear USB3 PHY reset */
 	reg = dwc3_readl(dwc->regs, DWC3_GUSB3PIPECTL(0));
 	reg &= ~DWC3_GUSB3PIPECTL_PHYSOFTRST;
 	dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(0), reg);
 
-	reg = dwc3_readl(dwc->regs, DWC3_GUSB3PIPECTL(0));
-	reg &= ~DWC3_GUSB3PIPECTL_DELAYP1TRANS;
-	dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(0), reg);
+	if (dwc->revision >= DWC3_REVISION_270A) {
+		reg = dwc3_readl(dwc->regs, DWC3_GUSB3PIPECTL(0));
+		reg |= DWC3_GUSB3PIPECTL_DELAYP1TRANS;
+		dwc3_writel(dwc->regs, DWC3_GUSB3PIPECTL(0), reg);
+	}
 
 	/* Assert USB2 PHY reset */
 	reg = dwc3_readl(dwc->regs, DWC3_GUSB2PHYCFG(0));
 	reg |= DWC3_GUSB2PHYCFG_PHYSOFTRST;
 	dwc3_writel(dwc->regs, DWC3_GUSB2PHYCFG(0), reg);
 
-	usleep_range(1000, 1200);
+	msleep(100);
 
 	/* Clear USB2 PHY reset */
 	reg = dwc3_readl(dwc->regs, DWC3_GUSB2PHYCFG(0));
 	reg &= ~DWC3_GUSB2PHYCFG_PHYSOFTRST;
 	dwc3_writel(dwc->regs, DWC3_GUSB2PHYCFG(0), reg);
 
-	usleep_range(200, 500);
+	msleep(100);
 
 	/* After PHYs are stable we can take Core out of reset state */
 	reg = dwc3_readl(dwc->regs, DWC3_GCTL);
 	reg &= ~DWC3_GCTL_CORESOFTRESET;
 	dwc3_writel(dwc->regs, DWC3_GCTL, reg);
 
-	usleep_range(1000, 1200);
+	msleep(100);
 }
 
 /**
@@ -562,7 +564,6 @@ static int dwc3_probe(struct platform_device *pdev)
 	void			*mem;
 
 	u32			hird_thresh;
-	u32			lpm_nyet_thresh;
 	u8			mode;
 	bool			host_only_mode;
 
@@ -627,11 +628,6 @@ static int dwc3_probe(struct platform_device *pdev)
 		dwc->hird_thresh = (u8) hird_thresh;
 	else
 		dwc->hird_thresh = DWC3_DCTL_HIRD_THRES_DEFAULT;
-
-	ret = of_property_read_u32(node, "snps,lpm-nyet-thresh",
-						&lpm_nyet_thresh);
-	if (!ret)
-		dwc->lpm_nyet_thresh = (u8)lpm_nyet_thresh;
 
 	dwc->enable_bus_suspend = of_property_read_bool(node,
 						"snps,bus-suspend-enable");

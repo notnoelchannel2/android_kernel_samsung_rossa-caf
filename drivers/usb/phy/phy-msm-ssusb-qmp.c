@@ -129,12 +129,12 @@ static const struct qmp_reg_val qmp_settings_rev1[] = {
 	{0x100, 0xD5}, /* QSERDES_COM_DIV_FRAC_START1 */
 	{0x104, 0xAA}, /* QSERDES_COM_DIV_FRAC_START2 */
 	{0x108, 0x4D}, /* QSERDES_COM_DIV_FRAC_START3 */
-	{0x9C, 0x11}, /* QSERDES_COM_PLLLOCK_CMP_EN */
+	{0x9C, 0x01}, /* QSERDES_COM_PLLLOCK_CMP_EN */
 	{0x90, 0x2B}, /* QSERDES_COM_PLLLOCK_CMP1 */
 	{0x94, 0x68}, /* QSERDES_COM_PLLLOCK_CMP2 */
 	{0x114, 0x7C}, /* QSERDES_COM_PLL_CRCTRL */
-	{0x34, 0x1F}, /* QSERDES_COM_PLL_CP_SETI */
-	{0x38, 0x12}, /* QSERDES_COM_PLL_IP_SETP */
+	{0x34, 0x07}, /* QSERDES_COM_PLL_CP_SETI */
+	{0x38, 0x1F}, /* QSERDES_COM_PLL_IP_SETP */
 	{0x3C, 0x0F}, /* QSERDES_COM_PLL_CP_SETP */
 	{0x24, 0x01}, /* QSERDES_COM_PLL_IP_SETI */
 	{0x0C, 0x0F}, /* QSERDES_COM_IE_TRIM */
@@ -149,7 +149,7 @@ static const struct qmp_reg_val qmp_settings_rev1[] = {
 	{0x50, 0x07}, /* QSERDES_COM_RESETSM_CNTRL2 */
 	{0x04, 0xE1}, /* QSERDES_COM_PLL_VCOTAIL_EN */
 
-	{0xE0, 0x24}, /* QSERDES_COM_RES_CODE_START_SEG1 */
+	{0xE0, 0x20}, /* QSERDES_COM_RES_CODE_START_SEG1 */
 	{0xE8, 0x77}, /* QSERDES_COM_RES_CODE_CAL_CSR */
 	{0xF0, 0x15}, /* QSERDES_COM_RES_TRIM_CONTROL */
 	{0x268, 0x02}, /* QSERDES_TX_RCV_DETECT_LVL */
@@ -186,19 +186,6 @@ static const struct qmp_reg_val qmp_override_pll[] = {
 	{-1, -1} /* terminating entry */
 };
 
-/* Foundry specific settings */
-static const struct qmp_reg_val qmp_settings_rev0_misc[] = {
-	{0x10C, 0x37}, /* QSERDES_COM_PLL_CRCTRL */
-	{0x34, 0x04}, /* QSERDES_COM_PLL_CP_SETI */
-	{0x38, 0x32}, /* QSERDES_COM_PLL_IP_SETP */
-	{0x3C, 0x05}, /* QSERDES_COM_PLL_CP_SETP */
-	{0x500, 0xF7}, /* QSERDES_RX_SIGDET_CNTRL */
-	{0x4A8, 0xFF}, /* QSERDES_RX_RX_EQ_GAIN1_LSB */
-	{0x6B0, 0xF4}, /* PCIE_USB3_PHY_FLL_CNT_VAL_L */
-	{0x6B4, 0x41}, /* PCIE_USB3_PHY_FLL_CNT_VAL_H_TOL */
-	{-1, -1} /* terminating entry */
-};
-
 struct msm_ssphy_qmp {
 	struct usb_phy		phy;
 	void __iomem		*base;
@@ -219,7 +206,6 @@ struct msm_ssphy_qmp {
 	bool			override_pll_cal;
 	bool			switch_pipe_clk_src;
 	bool			emulation;
-	bool			misc_config;
 };
 
 static inline char *get_cable_status_str(struct msm_ssphy_qmp *phy)
@@ -386,24 +372,6 @@ disable_aux_clk:
 	return ret;
 }
 
-static int configure_phy_regs(struct usb_phy *uphy,
-				const struct qmp_reg_val *reg)
-{
-	struct msm_ssphy_qmp *phy = container_of(uphy, struct msm_ssphy_qmp,
-					phy);
-
-	if (!reg) {
-		dev_err(uphy->dev, "NULL PHY configuration\n");
-		return -EINVAL;
-	}
-
-	while (reg->offset != -1 && reg->val != -1) {
-		writel_relaxed(reg->val, phy->base + reg->offset);
-		reg++;
-	}
-	return 0;
-}
-
 /* SSPHY Initialization */
 static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 {
@@ -412,7 +380,7 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 	int ret;
 	unsigned init_timeout_usec = INIT_MAX_TIME_USEC;
 	u32 revid;
-	const struct qmp_reg_val *reg = NULL, *misc = NULL;
+	const struct qmp_reg_val *reg = NULL;
 
 	dev_dbg(uphy->dev, "Initializing QMP phy\n");
 
@@ -439,7 +407,6 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 	switch (revid) {
 	case 0x10000000:
 		reg = qmp_settings_rev0;
-		misc = qmp_settings_rev0_misc;
 		break;
 	case 0x10000001:
 		reg = qmp_settings_rev1;
@@ -456,25 +423,17 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 
 	writel_relaxed(0x01, phy->base + PCIE_USB3_PHY_POWER_DOWN_CONTROL);
 
-	/* Main configuration */
-	if (configure_phy_regs(uphy, reg)) {
-		dev_err(uphy->dev, "Failed the main PHY configuration\n");
-		return ret;
+	while (reg && reg->offset != -1 && reg->val != -1) {
+		writel_relaxed(reg->val, phy->base + reg->offset);
+		reg++;
 	}
 
-	/* Feature specific configurations */
 	if (phy->override_pll_cal) {
 		reg = qmp_override_pll;
-		if (configure_phy_regs(uphy, reg)) {
-			dev_err(uphy->dev,
-				"Failed the PHY PLL override configuration\n");
-			return ret;
+		while (reg->offset != -1 && reg->val != -1) {
+			writel_relaxed(reg->val, phy->base + reg->offset);
+			reg++;
 		}
-	}
-	if (phy->misc_config) {
-		configure_phy_regs(uphy, misc);
-		dev_err(uphy->dev, "Failed the misc PHY configuration\n");
-		return ret;
 	}
 
 	writel_relaxed(0x00, phy->base + PCIE_USB3_PHY_SW_RESET);
@@ -612,13 +571,14 @@ static int msm_ssphy_qmp_set_params(struct usb_phy *uphy)
 static int msm_ssphy_power_enable(struct msm_ssphy_qmp *phy, bool on)
 {
 	bool host = phy->phy.flags & PHY_HOST_MODE;
+	bool chg_connected = phy->phy.flags & PHY_CHARGER_CONNECTED;
 	int ret = 0;
 
 	/*
 	 * Turn off the phy's LDOs when cable is disconnected for device mode
 	 * with external vbus_id indication.
 	 */
-	if (!host && !phy->cable_connected) {
+	if (!host && !chg_connected && !phy->cable_connected) {
 		if (on) {
 			ret = regulator_enable(phy->vdd);
 			if (ret)
@@ -681,11 +641,8 @@ static int msm_ssphy_qmp_set_suspend(struct usb_phy *uphy, int suspend)
 
 	if (suspend) {
 		msm_ssusb_qmp_enable_autonomous(phy);
-		if (!phy->cable_connected) {
+		if (!phy->cable_connected)
 			clk_disable_unprepare(phy->pipe_clk);
-			writel_relaxed(0x00,
-				phy->base + PCIE_USB3_PHY_POWER_DOWN_CONTROL);
-		}
 		clk_disable_unprepare(phy->cfg_ahb_clk);
 		clk_disable_unprepare(phy->aux_clk);
 		phy->in_suspend = true;
@@ -695,11 +652,8 @@ static int msm_ssphy_qmp_set_suspend(struct usb_phy *uphy, int suspend)
 		msm_ssphy_power_enable(phy, 1);
 		clk_prepare_enable(phy->aux_clk);
 		clk_prepare_enable(phy->cfg_ahb_clk);
-		if (!phy->cable_connected) {
+		if (!phy->cable_connected)
 			clk_prepare_enable(phy->pipe_clk);
-			writel_relaxed(0x01,
-				phy->base + PCIE_USB3_PHY_POWER_DOWN_CONTROL);
-		}
 		msm_ssusb_qmp_enable_autonomous(phy);
 		phy->in_suspend = false;
 		dev_dbg(uphy->dev, "QMP PHY is resumed\n");
@@ -813,11 +767,6 @@ static int msm_ssphy_qmp_probe(struct platform_device *pdev)
 					"qcom,override-pll-calibration");
 	if (phy->override_pll_cal)
 		dev_dbg(dev, "Override PHY PLL calibration is enabled.\n");
-
-	phy->misc_config = of_property_read_bool(dev->of_node,
-					"qcom,qmp-misc-config");
-	if (phy->misc_config)
-		dev_dbg(dev, "Miscellaneous configurations are enabled.\n");
 
 	phy->switch_pipe_clk_src = !of_property_read_bool(dev->of_node,
 					"qcom,no-pipe-clk-switch");

@@ -357,15 +357,22 @@ out:
 }
 
 static int
-validate_event(struct pmu_hw_events *hw_events,
+validate_event(struct pmu *pmu, struct pmu_hw_events *hw_events,
 	       struct perf_event *event)
 {
-	struct arm_pmu *armpmu = to_arm_pmu(event->pmu);
+	struct arm_pmu *armpmu;
 	struct hw_perf_event fake_event = event->hw;
 	struct pmu *leader_pmu = event->group_leader->pmu;
 
 	if (is_software_event(event))
 		return 1;
+	/*
+	 * Reject groups spanning multiple HW PMUs (e.g. CPU + CCI). The
+	 * core perf code won't check that the pmu->ctx == leader->ctx
+	 * until after pmu->event_init(event).
+	 */
+	if (event->pmu != pmu)
+		return 0;
 
 	if (event->pmu != leader_pmu || event->state < PERF_EVENT_STATE_OFF)
 		return 1;
@@ -373,6 +380,7 @@ validate_event(struct pmu_hw_events *hw_events,
 	if (event->state == PERF_EVENT_STATE_OFF && !event->attr.enable_on_exec)
 		return 1;
 
+	armpmu = to_arm_pmu(event->pmu);
 	return armpmu->get_event_idx(hw_events, &fake_event) >= 0;
 }
 
@@ -390,15 +398,15 @@ validate_group(struct perf_event *event)
 	memset(fake_used_mask, 0, sizeof(fake_used_mask));
 	fake_pmu.used_mask = fake_used_mask;
 
-	if (!validate_event(&fake_pmu, leader))
+	if (!validate_event(event->pmu, &fake_pmu, leader))
 		return -EINVAL;
 
 	list_for_each_entry(sibling, &leader->sibling_list, group_entry) {
-		if (!validate_event(&fake_pmu, sibling))
+		if (!validate_event(event->pmu, &fake_pmu, sibling))
 			return -EINVAL;
 	}
 
-	if (!validate_event(&fake_pmu, event))
+	if (!validate_event(event->pmu, &fake_pmu, event))
 		return -EINVAL;
 
 	return 0;
@@ -1899,15 +1907,6 @@ unsigned long perf_misc_flags(struct pt_regs *regs)
 	return misc;
 }
 
-static struct dentry *perf_debug_dir;
-
-struct dentry *perf_create_debug_dir(void)
-{
-	if (!perf_debug_dir)
-		perf_debug_dir = debugfs_create_dir("msm_perf", NULL);
-	return perf_debug_dir;
-}
-
 #ifdef CONFIG_PERF_EVENTS_RESET_PMU_DEBUGFS
 static __ref void reset_pmu_force(void)
 {
@@ -1953,13 +1952,15 @@ int __init init_pmu_actions(void)
 	struct dentry *file;
 	unsigned int value = 1;
 
-	dir = perf_create_debug_dir();
+	dir = debugfs_create_dir("msm_perf", NULL);
 	if (!dir)
 		return -ENOMEM;
 	file = debugfs_create_file("resetpmu", 0220, dir,
 		&value, &fops_pmuaction);
-	if (!file)
+	if (!file) {
+		debugfs_remove(dir);
 		return -ENOMEM;
+	}
 	return 0;
 }
 #else

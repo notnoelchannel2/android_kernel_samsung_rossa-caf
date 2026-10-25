@@ -85,7 +85,6 @@ extern struct clk_freq_tbl rcg_dummy_freq;
  * @cur_div: current branch divider value
  * @max_div: maximum branch divider value (if zero, no divider exists)
  * @halt_check: halt checking type
- * @toggle_memory: toggle memory during enable/disable if true
  * @base: pointer to base address of ioremapped registers.
  */
 struct branch_clk {
@@ -97,7 +96,6 @@ struct branch_clk {
 	u32 cur_div;
 	u32 max_div;
 	const u32 halt_check;
-	bool toggle_memory;
 	void *const __iomem *base;
 };
 

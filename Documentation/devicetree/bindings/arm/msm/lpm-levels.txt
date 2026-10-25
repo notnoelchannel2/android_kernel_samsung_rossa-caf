@@ -51,7 +51,6 @@ Required properties:
 	corresponding low power mode. The accepted values for this property
 	are:
 		- "active"
-		- "wfi"
 		- "retention"
 		- "gdhs"
 		- "pc"

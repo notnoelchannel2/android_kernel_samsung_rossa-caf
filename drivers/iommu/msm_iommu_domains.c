@@ -468,7 +468,6 @@ int msm_register_domain(struct msm_iova_layout *layout)
 	struct msm_iova_data *data;
 	struct mem_pool *pools;
 	struct bus_type *bus;
-	int no_redirect;
 
 	if (!layout)
 		return -EINVAL;
@@ -525,13 +524,9 @@ int msm_register_domain(struct msm_iova_layout *layout)
 	if (data->domain_num < 0)
 		goto free_pools;
 
-	data->domain = iommu_domain_alloc(bus);
+	data->domain = iommu_domain_alloc(bus, layout->domain_flags);
 	if (!data->domain)
 		goto free_domain_num;
-
-	no_redirect = !(layout->domain_flags & MSM_IOMMU_DOMAIN_PT_CACHEABLE);
-	iommu_domain_set_attr(data->domain,
-			DOMAIN_ATTR_COHERENT_HTW_DISABLE, &no_redirect);
 
 	msm_iommu_set_client_name(data->domain, layout->client_name);
 

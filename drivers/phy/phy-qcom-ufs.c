@@ -24,11 +24,6 @@
 
 #include <linux/phy/phy-qcom-ufs.h>
 
-static int __ufs_qcom_phy_init_vreg(struct phy *, struct ufs_qcom_phy_vreg *,
-				    const char *, bool);
-static int ufs_qcom_phy_init_vreg(struct phy *, struct ufs_qcom_phy_vreg *,
-				  const char *);
-
 int ufs_qcom_phy_calibrate(struct ufs_qcom_phy *ufs_qcom_phy,
 			   struct ufs_qcom_phy_calibration *tbl_A,
 			   int tbl_size_A,
@@ -129,9 +124,10 @@ int ufs_qcom_phy_base_init(struct platform_device *pdev,
 	struct resource *res;
 	int err = 0;
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "phy_mem");
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
-		dev_err(dev, "%s: phy_mem resource not found\n", __func__);
+		dev_err(dev, "%s: platform_get_resource() failed. returned NULL\n",
+			__func__);
 		err = -ENOMEM;
 		goto out;
 	}
@@ -139,16 +135,15 @@ int ufs_qcom_phy_base_init(struct platform_device *pdev,
 	phy_common->mmio = devm_ioremap_resource(dev, res);
 	if (IS_ERR(phy_common->mmio)) {
 		err = PTR_ERR(phy_common->mmio);
-		phy_common->mmio = NULL;
-		dev_err(dev, "%s: ioremap for phy_mem resource failed %d\n",
-			__func__, err);
+		dev_err(dev, "ioremap resource failed %d\n", err);
 	}
+
 out:
 	return err;
 }
 
-static int __ufs_qcom_phy_clk_get(struct phy *phy,
-			 const char *name, struct clk **clk_out, bool err_print)
+int ufs_qcom_phy_clk_get(struct phy *phy,
+			 const char *name, struct clk **clk_out)
 {
 	struct clk *clk;
 	int err = 0;
@@ -158,19 +153,12 @@ static int __ufs_qcom_phy_clk_get(struct phy *phy,
 	clk = devm_clk_get(dev, name);
 	if (IS_ERR(clk)) {
 		err = PTR_ERR(clk);
-		if (err_print)
-			dev_err(dev, "failed to get %s err %d", name, err);
+		dev_err(dev, "failed to get %s err %d", name, err);
 	} else {
 		*clk_out = clk;
 	}
 
 	return err;
-}
-
-int ufs_qcom_phy_clk_get(struct phy *phy,
-			 const char *name, struct clk **clk_out)
-{
-	return __ufs_qcom_phy_clk_get(phy, name, clk_out, true);
 }
 
 int
@@ -194,12 +182,10 @@ ufs_qcom_phy_init_clks(struct phy *generic_phy,
 	if (err)
 		goto out;
 
-	/*
-	 * "ref_clk_parent" is optional hence don't abort init if it's not
-	 * found.
-	 */
-	__ufs_qcom_phy_clk_get(generic_phy, "ref_clk_parent",
-				   &phy_common->ref_clk_parent, false);
+	err = ufs_qcom_phy_clk_get(generic_phy, "ref_clk_parent",
+				   &phy_common->ref_clk_parent);
+	if (err)
+		goto out;
 
 	err = ufs_qcom_phy_clk_get(generic_phy, "ref_clk",
 				   &phy_common->ref_clk);
@@ -221,19 +207,12 @@ ufs_qcom_phy_init_vregulators(struct phy *generic_phy,
 
 	err = ufs_qcom_phy_init_vreg(generic_phy, &phy_common->vdda_phy,
 		"vdda-phy");
-
-	if (err)
-		goto out;
-
-	/* vddp-ref-clk-* properties are optional */
-	__ufs_qcom_phy_init_vreg(generic_phy, &phy_common->vddp_ref_clk,
-				 "vddp-ref-clk", true);
 out:
 	return err;
 }
 
-static int __ufs_qcom_phy_init_vreg(struct phy *phy,
-		struct ufs_qcom_phy_vreg *vreg, const char *name, bool optional)
+int ufs_qcom_phy_init_vreg(struct phy *phy,
+			   struct ufs_qcom_phy_vreg *vreg, const char *name)
 {
 	int err = 0;
 	struct ufs_qcom_phy *ufs_qcom_phy = get_ufs_qcom_phy(phy);
@@ -250,9 +229,7 @@ static int __ufs_qcom_phy_init_vreg(struct phy *phy,
 	vreg->reg = devm_regulator_get(dev, name);
 	if (IS_ERR(vreg->reg)) {
 		err = PTR_ERR(vreg->reg);
-		vreg->reg = NULL;
-		if (!optional)
-			dev_err(dev, "failed to get %s, %d\n", name, err);
+		dev_err(dev, "failed to get %s, %d\n", name, err);
 		goto out;
 	}
 
@@ -272,11 +249,6 @@ static int __ufs_qcom_phy_init_vreg(struct phy *phy,
 			}
 			err = 0;
 		}
-		snprintf(prop_name, MAX_PROP_NAME, "%s-always-on", name);
-		if (of_get_property(dev->of_node, prop_name, NULL))
-			vreg->is_always_on = true;
-		else
-			vreg->is_always_on = false;
 	}
 
 	if (!strcmp(name, "vdda-pll")) {
@@ -285,21 +257,12 @@ static int __ufs_qcom_phy_init_vreg(struct phy *phy,
 	} else if (!strcmp(name, "vdda-phy")) {
 		vreg->max_uV = VDDA_PHY_MAX_UV;
 		vreg->min_uV = VDDA_PHY_MIN_UV;
-	} else if (!strcmp(name, "vddp-ref-clk")) {
-		vreg->max_uV = VDDP_REF_CLK_MAX_UV;
-		vreg->min_uV = VDDP_REF_CLK_MIN_UV;
 	}
 
 out:
 	if (err)
 		kfree(vreg->name);
 	return err;
-}
-
-static int ufs_qcom_phy_init_vreg(struct phy *phy,
-			struct ufs_qcom_phy_vreg *vreg, const char *name)
-{
-	return __ufs_qcom_phy_init_vreg(phy, vreg, name, false);
 }
 
 int ufs_qcom_phy_cfg_vreg(struct phy *phy,
@@ -389,17 +352,11 @@ int ufs_qcom_phy_enable_ref_clk(struct phy *generic_phy)
 		goto out;
 	}
 
-	/*
-	 * "ref_clk_parent" is optional clock hence make sure that clk reference
-	 * is available before trying to enable the clock.
-	 */
-	if (phy->ref_clk_parent) {
-		ret = clk_prepare_enable(phy->ref_clk_parent);
-		if (ret) {
-			dev_err(phy->dev, "%s: ref_clk_parent enable failed %d\n",
-					__func__, ret);
-			goto out_disable_src;
-		}
+	ret = clk_prepare_enable(phy->ref_clk_parent);
+	if (ret) {
+		dev_err(phy->dev, "%s: ref_clk_parent enable failed %d\n",
+				__func__, ret);
+		goto out_disable_src;
 	}
 
 	ret = clk_prepare_enable(phy->ref_clk);
@@ -413,8 +370,7 @@ int ufs_qcom_phy_enable_ref_clk(struct phy *generic_phy)
 	goto out;
 
 out_disable_parent:
-	if (phy->ref_clk_parent)
-		clk_disable_unprepare(phy->ref_clk_parent);
+	clk_disable_unprepare(phy->ref_clk_parent);
 out_disable_src:
 	clk_disable_unprepare(phy->ref_clk_src);
 out:
@@ -428,7 +384,7 @@ int ufs_qcom_phy_disable_vreg(struct phy *phy,
 	struct device *dev = ufs_qcom_phy->dev;
 	int ret = 0;
 
-	if (!vreg || !vreg->enabled || vreg->is_always_on)
+	if (!vreg || !vreg->enabled)
 		goto out;
 
 	ret = regulator_disable(vreg->reg);
@@ -451,12 +407,7 @@ void ufs_qcom_phy_disable_ref_clk(struct phy *generic_phy)
 
 	if (phy->is_ref_clk_enabled) {
 		clk_disable_unprepare(phy->ref_clk);
-		/*
-		 * "ref_clk_parent" is optional clock hence make sure that clk
-		 * reference is available before trying to disable the clock.
-		 */
-		if (phy->ref_clk_parent)
-			clk_disable_unprepare(phy->ref_clk_parent);
+		clk_disable_unprepare(phy->ref_clk_parent);
 		clk_disable_unprepare(phy->ref_clk_src);
 		phy->is_ref_clk_enabled = false;
 	}
@@ -685,22 +636,9 @@ int ufs_qcom_phy_power_on(struct phy *generic_phy)
 		goto out_disable_pll;
 	}
 
-	/* enable device PHY ref_clk pad rail */
-	if (phy_common->vddp_ref_clk.reg) {
-		err = ufs_qcom_phy_enable_vreg(generic_phy,
-					       &phy_common->vddp_ref_clk);
-		if (err) {
-			dev_err(dev, "%s enable vddp_ref_clk failed, err=%d\n",
-				__func__, err);
-			goto out_disable_ref_clk;
-		}
-	}
-
 	phy_common->is_powered_on = true;
 	goto out;
 
-out_disable_ref_clk:
-	ufs_qcom_phy_disable_ref_clk(generic_phy);
 out_disable_pll:
 	ufs_qcom_phy_disable_vreg(generic_phy, &phy_common->vdda_pll);
 out_disable_phy:
@@ -715,9 +653,6 @@ int ufs_qcom_phy_power_off(struct phy *generic_phy)
 
 	phy_common->phy_spec_ops->power_control(phy_common, false);
 
-	if (phy_common->vddp_ref_clk.reg)
-		ufs_qcom_phy_disable_vreg(generic_phy,
-					  &phy_common->vddp_ref_clk);
 	ufs_qcom_phy_disable_ref_clk(generic_phy);
 
 	ufs_qcom_phy_disable_vreg(generic_phy, &phy_common->vdda_pll);

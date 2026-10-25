@@ -662,6 +662,20 @@ static int post_test(struct test_data *td)
 	return ret;
 }
 
+/*
+ * The timer verifies that the test will be completed even if we don't get
+ * the completion callback for all the requests.
+ */
+static void test_timeout_handler(unsigned long data)
+{
+	struct test_data *td = (struct test_data *)data;
+
+	pr_info("%s: TIMEOUT timer expired", __func__);
+	td->test_state = TEST_COMPLETED;
+	wake_up(&td->wait_q);
+	return;
+}
+
 static unsigned int get_timeout_msec(struct test_data *td)
 {
 	if (td->test_info.timeout_msec)
@@ -740,6 +754,8 @@ int test_iosched_start_test(struct test_info *t_info)
 		msleep(2000);
 
 		timeout_msec = get_timeout_msec(ptd);
+		mod_timer(&ptd->timeout_timer, jiffies +
+			  msecs_to_jiffies(timeout_msec));
 
 		if (ptd->test_info.get_test_case_str_fn)
 			test_name = ptd->test_info.get_test_case_str_fn(ptd);
@@ -763,17 +779,8 @@ int test_iosched_start_test(struct test_info *t_info)
 
 		pr_info("%s: Waiting for the test completion", __func__);
 
-		ret = wait_event_interruptible_timeout(ptd->wait_q,
-			(ptd->test_state == TEST_COMPLETED),
-			msecs_to_jiffies(timeout_msec));
-		if (ret <= 0) {
-			ptd->test_state = TEST_COMPLETED;
-			if (!ret)
-				pr_info("%s: Test timeout\n", __func__);
-			else
-				pr_err("%s: Test error=%d\n", __func__, ret);
-			goto error;
-		}
+		wait_event(ptd->wait_q, ptd->test_state == TEST_COMPLETED);
+		del_timer_sync(&ptd->timeout_timer);
 
 		memcpy(t_info, &ptd->test_info, sizeof(struct test_info));
 
@@ -988,25 +995,24 @@ static int test_dispatch_from(struct request_queue *q,
 	struct test_request *test_rq;
 	struct request *rq;
 	int ret = 0;
-	unsigned long flags;
 
 	if (!ptd)
 		goto err;
 
-	spin_lock_irqsave(&ptd->lock, flags);
+	spin_lock_irq(&ptd->lock);
 	if (!list_empty(queue)) {
 		test_rq = list_entry(queue->next, struct test_request,
 				queuelist);
 		rq = test_rq->rq;
 		if (!rq) {
 			pr_err("%s: null request,return", __func__);
-			spin_unlock_irqrestore(&ptd->lock, flags);
+			spin_unlock_irq(&ptd->lock);
 			goto err;
 		}
 		list_move_tail(&test_rq->queuelist, &ptd->dispatched_queue);
 		ptd->dispatched_count++;
 		(*count)--;
-		spin_unlock_irqrestore(&ptd->lock, flags);
+		spin_unlock_irq(&ptd->lock);
 
 		print_req(rq);
 		elv_dispatch_sort(q, rq);
@@ -1014,7 +1020,7 @@ static int test_dispatch_from(struct request_queue *q,
 		ret = 1;
 		goto err;
 	}
-	spin_unlock_irqrestore(&ptd->lock, flags);
+	spin_unlock_irq(&ptd->lock);
 
 err:
 	return ret;
@@ -1135,6 +1141,9 @@ static int test_init_queue(struct request_queue *q, struct elevator_type *e)
 	INIT_LIST_HEAD(&ptd->urgent_queue);
 	init_waitqueue_head(&ptd->wait_q);
 	ptd->req_q = q;
+
+	setup_timer(&ptd->timeout_timer, test_timeout_handler,
+		    (unsigned long)ptd);
 
 	spin_lock_init(&ptd->lock);
 

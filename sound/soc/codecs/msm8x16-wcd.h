@@ -162,8 +162,9 @@ struct msm8916_asoc_mach_data {
 	int us_euro_gpio;
 	int mclk_freq;
 	int lb_mode;
-	u8 micbias1_cap_mode;
-	u8 micbias2_cap_mode;
+#ifdef CONFIG_AUDIO_SECONDARY_MIC_USE_EXT_BIAS_ENABLE
+	int mic_bias_gpio;
+#endif /* CONFIG_AUDIO_SECONDARY_MIC_USE_EXT_BIAS_ENABLE */
 	atomic_t mclk_rsc_ref;
 	atomic_t mclk_enabled;
 	struct mutex cdc_mclk_mutex;
@@ -171,7 +172,6 @@ struct msm8916_asoc_mach_data {
 	struct afe_digital_clk_cfg digital_cdc_clk;
 	void __iomem *vaddr_gpio_mux_spkr_ctl;
 	void __iomem *vaddr_gpio_mux_mic_ctl;
-	void __iomem *vaddr_gpio_mux_pcm_ctl;
 };
 
 struct msm8x16_wcd_pdata {
@@ -227,17 +227,22 @@ struct msm8x16_wcd_priv {
 	bool mclk_enabled;
 	bool clock_active;
 	bool config_mode_active;
+	u16 boost_option;
 	bool spk_boost_set;
 	bool ear_pa_boost_set;
 	bool ext_spk_boost_set;
 	bool dec_active[NUM_DECIMATORS];
 	struct on_demand_supply on_demand_list[ON_DEMAND_SUPPLIES_MAX];
 	struct regulator *spkdrv_reg;
+#ifdef CONFIG_SAMSUNG_JACK
+	int micb_2_ref_cnt;
+#endif /* CONFIG_SAMSUNG_JACK */
 	/* mbhc module */
 	struct wcd_mbhc mbhc;
 	/* cal info for codec */
 	struct fw_info *fw_data;
 	struct blocking_notifier_head notifier;
+	unsigned long status_mask;
 
 };
 
@@ -254,6 +259,12 @@ extern int msm8x16_register_notifier(struct snd_soc_codec *codec,
 
 extern int msm8x16_unregister_notifier(struct snd_soc_codec *codec,
 				     struct notifier_block *nblock);
+
+#ifdef CONFIG_AUDIO_QUAT_I2S_ENABLE
+#ifdef CONFIG_AUDIO_SPEAKER_OUT_MAXIM_AMP_ENABLE
+extern void msm8x16_wcd_speaker_boost_force_enable(int enable);
+#endif /* CONFIG_AUDIO_SPEAKER_OUT_MAXIM_AMP_ENABLE */
+#endif /* CONFIG_AUDIO_QUAT_I2S_ENABLE */
 
 #endif
 

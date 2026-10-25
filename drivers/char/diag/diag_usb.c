@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -105,7 +105,7 @@ static void usb_connect(struct diag_usb_info *ch)
 	int num_write = 0;
 	int num_read = 1; /* Only one read buffer for any USB channel */
 
-	if (!ch || !ch->connected)
+	if (!ch)
 		return;
 
 	num_write = diag_mempools[ch->mempool].poolsize;
@@ -209,7 +209,7 @@ static void diag_usb_write_done(struct diag_usb_info *ch,
 	ch->write_cnt++;
 	ctxt = (int)(uintptr_t)req->context;
 	if (ch->ops && ch->ops->write_done)
-		ch->ops->write_done(req->buf, req->actual, ctxt, ch->ctxt);
+		ch->ops->write_done(req->buf, req->actual, ctxt, DIAG_USB_MODE);
 	diagmem_free(driver, req, ch->mempool);
 	queue_work(ch->usb_wq, &(ch->read_work));
 }

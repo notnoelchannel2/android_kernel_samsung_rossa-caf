@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -187,10 +187,6 @@ struct sps_pipe {
 	struct sps_bam_sys_mode sys;
 
 	bool disconnecting;
-	u32 bam_pipe_event_reg_offset;
-	u32 bam_pipe_sw_offset_reg_offset;
-	bool write_desc_offset_cached;
-	u32 cached_write_desc_offset;
 };
 
 /* BAM device descriptor */
@@ -419,7 +415,7 @@ int sps_bam_pipe_reg_event(struct sps_bam *dev, u32 pipe_index,
  *
  * @dev - pointer to BAM device descriptor
  *
- * @pipe- pointer to pipe descriptor
+ * @pipe_index - pipe index
  *
  * @addr - physical address of buffer to transfer
  *
@@ -432,8 +428,8 @@ int sps_bam_pipe_reg_event(struct sps_bam *dev, u32 pipe_index,
  * @return 0 on success, negative value on error
  *
  */
-int sps_bam_pipe_transfer_one(struct sps_bam *dev, struct sps_pipe *pipe,
-			u32 addr, u32 size, void *user, u32 flags);
+int sps_bam_pipe_transfer_one(struct sps_bam *dev, u32 pipe_index, u32 addr,
+			      u32 size, void *user, u32 flags);
 
 /**
  * Submit a transfer to a BAM pipe
@@ -442,14 +438,14 @@ int sps_bam_pipe_transfer_one(struct sps_bam *dev, struct sps_pipe *pipe,
  *
  * @dev - pointer to BAM device descriptor
  *
- * @pipe - pointer to pipe descriptor
+ * @pipe_index - pipe index
  *
  * @transfer - pointer to transfer struct
  *
  * @return 0 on success, negative value on error
  *
  */
-int sps_bam_pipe_transfer(struct sps_bam *dev, struct sps_pipe *pipe,
+int sps_bam_pipe_transfer(struct sps_bam *dev, u32 pipe_index,
 			 struct sps_transfer *transfer);
 
 /**
@@ -513,15 +509,14 @@ int sps_bam_pipe_is_empty(struct sps_bam *dev, u32 pipe_index, u32 *empty);
  *
  * @dev - pointer to BAM device descriptor
  *
- * @pipe - pointer to pipe descriptor
+ * @pipe_index - pipe index
  *
  * @count - pointer to count status
  *
  * @return 0 on success, negative value on error
  *
  */
-int sps_bam_get_free_count(struct sps_bam *dev, struct sps_pipe *pipe,
-					u32 *count);
+int sps_bam_get_free_count(struct sps_bam *dev, u32 pipe_index, u32 *count);
 
 /**
  * Set BAM pipe to satellite ownership
@@ -566,12 +561,12 @@ int sps_bam_pipe_timer_ctrl(struct sps_bam *dev, u32 pipe_index,
  *
  * @dev - pointer to BAM device descriptor
  *
- * @pipe - pointer to pipe descriptor
+ * @pipe_index - pipe index
  *
  * @desc_num - number of unused descriptors
  *
  */
-int sps_bam_pipe_get_unused_desc_num(struct sps_bam *dev, struct sps_pipe *pipe,
+int sps_bam_pipe_get_unused_desc_num(struct sps_bam *dev, u32 pipe_index,
 					u32 *desc_num);
 
 /*
@@ -583,15 +578,4 @@ int sps_bam_pipe_get_unused_desc_num(struct sps_bam *dev, struct sps_pipe *pipe,
  * Return: 0 on success, negative value on error
  */
 int sps_bam_check_irq(struct sps_bam *dev);
-
-/*
- * sps_bam_pipe_pending_desc - checking pending descriptor.
- * @dev:	BAM device handle
- * @pipe_index:	pipe index
- *
- * This function checks if a pipe of a BAM has any pending descriptor.
- *
- * @return true if there is any desc pending
- */
-bool sps_bam_pipe_pending_desc(struct sps_bam *dev, u32 pipe_index);
 #endif	/* _SPSBAM_H_ */

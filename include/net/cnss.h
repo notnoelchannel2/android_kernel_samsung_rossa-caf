@@ -152,22 +152,7 @@ extern void cnss_set_driver_status(enum cnss_driver_status driver_status);
 #ifdef CONFIG_WCNSS_MEM_PRE_ALLOC
 extern void *wcnss_prealloc_get(unsigned int size);
 extern int wcnss_prealloc_put(void *ptr);
-extern int wcnss_pre_alloc_reset(void);
-#else
-static inline int wcnss_pre_alloc_reset(void) { return 0; }
 #endif
-
-#if defined(CONFIG_WCNSS_MEM_PRE_ALLOC) && defined(CONFIG_SLUB_DEBUG)
-void wcnss_prealloc_check_memory_leak(void);
-#else
-static inline void wcnss_prealloc_check_memory_leak(void) {}
-#endif
-
 
 extern int msm_pcie_enumerate(u32 rc_idx);
-extern int cnss_auto_suspend(void);
-extern int cnss_auto_resume(void);
-extern int cnss_prevent_auto_suspend(const char *caller_func);
-extern int cnss_allow_auto_suspend(const char *caller_func);
-extern int cnss_is_auto_suspend_allowed(const char *caller_func);
 #endif /* _NET_CNSS_H_ */

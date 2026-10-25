@@ -481,10 +481,6 @@ static int hw_ep_flush(int num, int dir)
 					dir ? "IN" : "OUT");
 				debug_ept_flush_info(num, dir);
 				_udc->skip_flush = true;
-				/* Notify to trigger h/w reset recovery later */
-				if (_udc->udc_driver->notify_event)
-					_udc->udc_driver->notify_event(_udc,
-						CI13XXX_CONTROLLER_ERROR_EVENT);
 				return 0;
 			}
 		}
@@ -2453,6 +2449,7 @@ __acquires(udc->lock)
 	int retval;
 
 	trace("%p", udc);
+	printk(KERN_INFO "usb:: %s udc: %p\n", __func__, udc);
 
 	if (udc == NULL) {
 		err("EINVAL");
@@ -3003,10 +3000,6 @@ static int ci13xxx_exit_lpm(struct ci13xxx *udc, bool allow_sleep)
 {
 	if (!udc)
 		return -ENODEV;
-
-	/* Make sure phy driver is done with its bus suspend handling */
-	if (udc->udc_driver->cancel_pending_suspend && allow_sleep)
-		udc->udc_driver->cancel_pending_suspend(udc);
 
 	/* Check if the controller is in low power mode state */
 	if (udc->udc_driver->in_lpm &&

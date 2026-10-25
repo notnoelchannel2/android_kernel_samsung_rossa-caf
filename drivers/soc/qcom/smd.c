@@ -128,6 +128,11 @@ static struct interrupt_config private_intr_config[NUM_SMD_SUBSYSTEMS] = {
 	},
 };
 
+union fifo_mem {
+	uint64_t u64;
+	uint8_t u8;
+};
+
 struct interrupt_stat interrupt_stats[NUM_SMD_SUBSYSTEMS];
 
 #define SMSM_STATE_ADDR(entry)           (smsm_info.state + entry)
@@ -229,8 +234,33 @@ static inline void smd_write_intr(unsigned int val, void __iomem *addr)
  */
 static void *smd_memcpy_to_fifo(void *dest, const void *src, size_t num_bytes)
 {
+	union fifo_mem *temp_dst = (union fifo_mem *)dest;
+	union fifo_mem *temp_src = (union fifo_mem *)src;
+	uintptr_t mask = sizeof(union fifo_mem) - 1;
 
-	memcpy_toio(dest, src, num_bytes);
+	/* Do byte copies until we hit 8-byte (double word) alignment */
+	while ((uintptr_t)temp_dst & mask && num_bytes) {
+		__raw_writeb_no_log(temp_src->u8, temp_dst);
+		temp_src = (union fifo_mem *)((uintptr_t)temp_src + 1);
+		temp_dst = (union fifo_mem *)((uintptr_t)temp_dst + 1);
+		num_bytes--;
+	}
+
+	/* Do double word copies */
+	while (num_bytes >= sizeof(union fifo_mem)) {
+		__raw_writeq_no_log(temp_src->u64, temp_dst);
+		temp_dst++;
+		temp_src++;
+		num_bytes -= sizeof(union fifo_mem);
+	}
+
+	/* Copy remaining bytes */
+	while (num_bytes--) {
+		__raw_writeb_no_log(temp_src->u8, temp_dst);
+		temp_src = (union fifo_mem *)((uintptr_t)temp_src + 1);
+		temp_dst = (union fifo_mem *)((uintptr_t)temp_dst + 1);
+	}
+
 	return dest;
 }
 
@@ -248,7 +278,33 @@ static void *smd_memcpy_to_fifo(void *dest, const void *src, size_t num_bytes)
  */
 static void *smd_memcpy_from_fifo(void *dest, const void *src, size_t num_bytes)
 {
-	memcpy_fromio(dest, src, num_bytes);
+	union fifo_mem *temp_dst = (union fifo_mem *)dest;
+	union fifo_mem *temp_src = (union fifo_mem *)src;
+	uintptr_t mask = sizeof(union fifo_mem) - 1;
+
+	/* Do byte copies until we hit 8-byte (double word) alignment */
+	while ((uintptr_t)temp_src & mask && num_bytes) {
+		temp_dst->u8 = __raw_readb_no_log(temp_src);
+		temp_src = (union fifo_mem *)((uintptr_t)temp_src + 1);
+		temp_dst = (union fifo_mem *)((uintptr_t)temp_dst + 1);
+		num_bytes--;
+	}
+
+	/* Do double word copies */
+	while (num_bytes >= sizeof(union fifo_mem)) {
+		temp_dst->u64 = __raw_readq_no_log(temp_src);
+		temp_dst++;
+		temp_src++;
+		num_bytes -= sizeof(union fifo_mem);
+	}
+
+	/* Copy remaining bytes */
+	while (num_bytes--) {
+		temp_dst->u8 = __raw_readb_no_log(temp_src);
+		temp_src = (union fifo_mem *)((uintptr_t)temp_src + 1);
+		temp_dst = (union fifo_mem *)((uintptr_t)temp_dst + 1);
+	}
+
 	return dest;
 }
 
@@ -669,10 +725,21 @@ static void scan_alloc_table(struct smd_alloc_elm *shared,
 	}
 }
 
-static void smd_channel_probe_now(struct remote_proc_info *r_info)
+/**
+ * smd_channel_probe_worker() - Scan for newly created SMD channels and init
+ *				local structures so the channels are visable to
+ *				local clients
+ *
+ * @work: work_struct corresponding to an instance of this function running on
+ *		a workqueue.
+ */
+static void smd_channel_probe_worker(struct work_struct *work)
 {
 	struct smd_alloc_elm *shared;
+	struct remote_proc_info *r_info;
 	unsigned tbl_size;
+
+	r_info = container_of(work, struct remote_proc_info, probe_work);
 
 	shared = smem_get_entry(ID_CH_ALLOC_TBL, &tbl_size,
 							r_info->remote_pid, 0);
@@ -698,23 +765,6 @@ static void smd_channel_probe_now(struct remote_proc_info *r_info)
 			r_info);
 
 	mutex_unlock(&smd_probe_lock);
-}
-
-/**
- * smd_channel_probe_worker() - Scan for newly created SMD channels and init
- *				local structures so the channels are visable to
- *				local clients
- *
- * @work: work_struct corresponding to an instance of this function running on
- *		a workqueue.
- */
-static void smd_channel_probe_worker(struct work_struct *work)
-{
-	struct remote_proc_info *r_info;
-
-	r_info = container_of(work, struct remote_proc_info, probe_work);
-
-	smd_channel_probe_now(r_info);
 }
 
 /**
@@ -1290,7 +1340,6 @@ static void smd_state_change(struct smd_channel *ch,
 			ch->half_ch->set_tail(ch->recv, 0);
 			ch->half_ch->set_head(ch->send, 0);
 			ch->half_ch->set_fBLOCKREADINTR(ch->send, 0);
-			ch->current_packet = 0;
 			ch_set_state(ch, SMD_SS_OPENING);
 		}
 		break;
@@ -1307,6 +1356,7 @@ static void smd_state_change(struct smd_channel *ch,
 	case SMD_SS_CLOSED:
 		if (ch->half_ch->get_state(ch->send) == SMD_SS_OPENED) {
 			ch_set_state(ch, SMD_SS_CLOSING);
+			ch->current_packet = 0;
 			ch->pending_pkt_sz = 0;
 			ch->notify(ch->priv, SMD_EVENT_CLOSE);
 		}
@@ -1915,16 +1965,6 @@ int smd_named_open_on_edge(const char *name, uint32_t edge,
 		ch = smd_get_channel(name, edge);
 		if (!ch)
 			return -ENODEV;
-	}
-
-	if (ch->half_ch->get_fSTATE(ch->send)) {
-		/* remote side hasn't acknowledged our last state transition */
-		SMD_INFO("%s: ch %d valid, waiting for remote to ack state\n",
-				__func__, ch->n);
-		msleep(250);
-		if (ch->half_ch->get_fSTATE(ch->send))
-			SMD_INFO("%s: ch %d - no remote ack, continuing\n",
-					__func__, ch->n);
 	}
 
 	if (notify == 0)
@@ -3008,7 +3048,7 @@ static int restart_notifier_cb(struct notifier_block *this,
  */
 void smd_post_init(unsigned remote_pid)
 {
-	smd_channel_probe_now(&remote_info[remote_pid]);
+	schedule_work(&remote_info[remote_pid].probe_work);
 }
 
 /**

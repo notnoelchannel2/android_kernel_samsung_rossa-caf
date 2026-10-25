@@ -123,12 +123,10 @@ int ipa_rm_resource_producer_request(struct ipa_rm_resource_prod *producer);
 int ipa_rm_resource_producer_release(struct ipa_rm_resource_prod *producer);
 
 int ipa_rm_resource_consumer_request(struct ipa_rm_resource_cons *consumer,
-				u32 needed_bw,
-				bool inc_usage_count);
+				u32 needed_bw);
 
 int ipa_rm_resource_consumer_release(struct ipa_rm_resource_cons *consumer,
-				u32 needed_bw,
-				bool dec_usage_count);
+				u32 needed_bw);
 
 int ipa_rm_resource_set_perf_profile(struct ipa_rm_resource *resource,
 				     struct ipa_rm_perf_profile *profile);

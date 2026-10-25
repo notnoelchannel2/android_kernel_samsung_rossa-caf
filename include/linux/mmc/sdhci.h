@@ -26,7 +26,6 @@ struct sdhci_next {
 
 enum sdhci_power_policy {
 	SDHCI_PERFORMANCE_MODE,
-	SDHCI_PERFORMANCE_MODE_INIT,
 	SDHCI_POWER_SAVE_MODE,
 };
 
@@ -176,6 +175,9 @@ struct sdhci_host {
  */
 #define SDHCI_QUIRK2_ADMA_SKIP_DATA_ALIGNMENT             (1<<13)
 
+/* Use reset workaround in case sdhci reset timeouts */
+#define SDHCI_QUIRK2_USE_RESET_WORKAROUND		(1<<15)
+
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
 
@@ -264,8 +266,7 @@ struct sdhci_host {
 #define SDHCI_TUNING_MODE_1	0
 	struct timer_list	tuning_timer;	/* Timer for tuning */
 
-	unsigned int *cpu_dma_latency_us;
-	unsigned int cpu_dma_latency_tbl_sz;
+	unsigned int cpu_dma_latency_us;
 	struct pm_qos_request pm_qos_req_dma;
 	unsigned int pm_qos_timeout_us;         /* timeout for PM QoS request */
 	struct device_attribute pm_qos_tout;
@@ -280,6 +281,9 @@ struct sdhci_host {
 	bool disable_sdio_irq_deferred; /* status of disabling sdio irq */
 	u32 auto_cmd_err_sts;
 	struct ratelimit_state dbg_dump_rs;
+	int reset_wa_applied; /* reset workaround status */
+	ktime_t reset_wa_t; /* time when the reset workaround is applied */
+	int reset_wa_cnt; /* total number of times workaround is used */
 	unsigned long private[0] ____cacheline_aligned;
 };
 #endif /* LINUX_MMC_SDHCI_H */

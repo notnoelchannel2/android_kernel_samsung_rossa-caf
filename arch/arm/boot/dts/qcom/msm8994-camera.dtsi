@@ -237,7 +237,7 @@
 			320000000 0 0>;
 	};
 
-	vfe0: qcom,vfe@fda10000 {
+	qcom,vfe@fda10000 {
 		cell-index = <0>;
 		compatible = "qcom,vfe46";
 		reg = <0xfda10000 0x1000>,
@@ -260,7 +260,7 @@
 
 	};
 
-	vfe1: qcom,vfe@fda14000 {
+	qcom,vfe@fda14000 {
 		cell-index = <1>;
 		compatible = "qcom,vfe46";
 		reg = <0xfda14000 0x1000>,
@@ -385,7 +385,6 @@
 			"camss_vfe_cpp_ahb_clk", "camss_vfe_cpp_axi_clk",
 			"camss_vfe_cpp_clk","micro_iface_clk", "camss_ahb_clk";
 		qcom,clock-rates = <0 465000000 0 0 465000000 0 0>;
-		qcom,min-clock-rate = <465000000>;
 	};
 
 	qcom,fd@fd878000 {
@@ -404,9 +403,7 @@
 			<&clock_mmss clk_fd_ahb_clk>;
 		clock-names = "fd_core_clk", "fd_core_uar_clk",
 			"fd_axi_clk", "fd_ahb_clk";
-		clock-rates = <60000000 60000000 75000000 40000000>,
-				<200000000 200000000 150000000 40000000>,
-				<400000000 400000000 333000000 80000000>;
+		clock-rates = <400000000 400000000 333000000 800000000>;
 	};
 
 	cci: qcom,cci@fda0c000 {
@@ -427,8 +424,7 @@
 		clock-names = "camss_top_ahb_clk", "cci_src_clk",
 			"cci_ahb_clk", "camss_cci_clk",
 			"camss_ahb_clk";
-		qcom,clock-rates = <0 19200000 0 0 0>,
-				<0 37500000 0 0 0>;
+		qcom,clock-rates = <0 19200000 0 0 0 0>;
 		pinctrl-names = "cci_default", "cci_suspend";
 			pinctrl-0 = <&cci0_active &cci1_active>;
 			pinctrl-1 = <&cci0_suspend &cci1_suspend>;
@@ -451,11 +447,6 @@
 		i2c_freq_custom: qcom,i2c_custom_mode {
 			status = "disabled";
 		};
-
-		i2c_freq_1Mhz: qcom,i2c_fast_plus_mode {
-			status = "disabled";
-		};
-
 	};
 };
 
@@ -498,20 +489,5 @@
 	qcom,hw-scl-stretch-en = <1>;
 	qcom,hw-trdhld = <6>;
 	qcom,hw-tsp = <3>;
-	status = "ok";
-};
-
-&i2c_freq_1Mhz {
-	qcom,hw-thigh = <16>;
-	qcom,hw-tlow = <22>;
-	qcom,hw-tsu-sto = <17>;
-	qcom,hw-tsu-sta = <18>;
-	qcom,hw-thd-dat = <16>;
-	qcom,hw-thd-sta = <15>;
-	qcom,hw-tbuf = <19>;
-	qcom,hw-scl-stretch-en = <1>;
-	qcom,hw-trdhld = <3>;
-	qcom,hw-tsp = <3>;
-	qcom,cci-clk-src = <37500000>;
 	status = "ok";
 };

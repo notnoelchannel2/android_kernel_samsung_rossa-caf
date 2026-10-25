@@ -31,10 +31,6 @@
 #define CPP_HW_VERSION_2_0_0  0x20000000
 #define CPP_HW_VERSION_4_0_0  0x40000000
 #define CPP_HW_VERSION_4_1_0  0x40010000
-#define CPP_HW_VERSION_5_0_0  0x50000000
-#define CPP_HW_VERSION_5_1_0  0x50010000
-
-#define VBIF_VERSION_2_3_0  0x20030000
 
 #define MAX_ACTIVE_CPP_INSTANCE 8
 #define MAX_CPP_PROCESSING_FRAME 2
@@ -172,6 +168,11 @@ struct msm_cpp_work_t {
 	struct work_struct my_work;
 	struct cpp_device *cpp_dev;
 };
+struct msm_cpp_clock_settings_t {
+	long clock_rate;
+	uint64_t avg;
+	uint64_t inst;
+};
 
 struct cpp_device {
 	struct platform_device *pdev;
@@ -197,7 +198,6 @@ struct cpp_device {
 	struct msm_cpp_work_t *work;
 	uint32_t fw_version;
 	uint8_t stream_cnt;
-	uint8_t timeout_trial_cnt;
 
 	int domain_num;
 	struct iommu_domain *domain;
@@ -205,7 +205,6 @@ struct cpp_device {
 	struct ion_client *client;
 	struct kref refcount;
 	uint32_t num_clk;
-	uint32_t min_clk_rate;
 
 	/* Reusing proven tasklet from msm isp */
 	atomic_t irq_cnt;

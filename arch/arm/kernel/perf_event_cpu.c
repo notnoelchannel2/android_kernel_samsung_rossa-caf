@@ -589,15 +589,6 @@ err_cpu_pm:
 	return err;
 }
 
-static struct dentry *perf_debug_dir;
-
-struct dentry *perf_create_debug_dir(void)
-{
-	if (!perf_debug_dir)
-		perf_debug_dir = debugfs_create_dir("msm_perf", NULL);
-	return perf_debug_dir;
-}
-
 #ifdef CONFIG_PERF_EVENTS_RESET_PMU_DEBUGFS
 static void reset_pmu_force(void)
 {
@@ -632,13 +623,15 @@ int __init init_pmu_actions(void)
 	struct dentry *file;
 	unsigned int value = 1;
 
-	dir = perf_create_debug_dir();
+	dir = debugfs_create_dir("msm_perf", NULL);
 	if (!dir)
 		return -ENOMEM;
 	file = debugfs_create_file("resetpmu", 0220, dir,
 		&value, &fops_pmuaction);
-	if (!file)
+	if (!file) {
+		debugfs_remove(dir);
 		return -ENOMEM;
+	}
 	return 0;
 }
 #else

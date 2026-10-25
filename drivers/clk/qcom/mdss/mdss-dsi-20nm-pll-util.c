@@ -147,7 +147,7 @@ int get_mdss_pixel_mux_sel(struct mux_clk *clk)
 	return 0;
 }
 
-static void pll_20nm_cache_trim_codes(struct mdss_pll_resources *dsi_pll_res)
+void dsi_cache_trim_codes(struct mdss_pll_resources *dsi_pll_res)
 {
 	int rc;
 
@@ -161,37 +161,55 @@ static void pll_20nm_cache_trim_codes(struct mdss_pll_resources *dsi_pll_res)
 	}
 
 	dsi_pll_res->cache_pll_trim_codes[0] =
-		MDSS_PLL_REG_R(dsi_pll_res->pll_base,
-			MMSS_DSI_PHY_PLL_CORE_KVCO_CODE);
+		(MDSS_PLL_REG_R(dsi_pll_res->pll_base,
+		MMSS_DSI_PHY_PLL_CORE_KVCO_CODE) & ~0xF);
 	dsi_pll_res->cache_pll_trim_codes[1] =
-		MDSS_PLL_REG_R(dsi_pll_res->pll_base,
-			MMSS_DSI_PHY_PLL_CORE_VCO_TUNE);
-
-	pr_debug("core_kvco_code=0x%x core_vco_turn=0x%x\n",
-		dsi_pll_res->cache_pll_trim_codes[0],
-		dsi_pll_res->cache_pll_trim_codes[1]);
+		(MDSS_PLL_REG_R(dsi_pll_res->pll_base,
+		MMSS_DSI_PHY_PLL_CORE_VCO_TAIL) & ~0xF);
+	dsi_pll_res->cache_pll_trim_codes[2] =
+		(MDSS_PLL_REG_R(dsi_pll_res->pll_base,
+		MMSS_DSI_PHY_PLL_CORE_VCO_TUNE) & ~0x7F);
+	dsi_pll_res->cache_pll_trim_codes[3] =
+		(MDSS_PLL_REG_R(dsi_pll_res->pll_base,
+		MMSS_DSI_PHY_PLL_CORE_RES_CODE_UP) & ~0xF);
+	dsi_pll_res->cache_pll_trim_codes[4] =
+		(MDSS_PLL_REG_R(dsi_pll_res->pll_base,
+		MMSS_DSI_PHY_PLL_CORE_RES_CODE_DN) & ~0xF);
 
 	mdss_pll_resource_enable(dsi_pll_res, false);
 
 	dsi_pll_res->reg_upd = true;
 }
 
-static void pll_20nm_override_trim_codes(struct mdss_pll_resources *dsi_pll_res)
+static void dsi_dfps_override_trim_codes(struct mdss_pll_resources *dsi_pll_res)
 {
-	u32 reg_data;
-	void __iomem *pll_base = dsi_pll_res->pll_base;
+	int reg_data;
 
 	/*
 	 * Override mux config for all cached trim codes from
 	 * saved config except for VCO Tune
 	 */
-	reg_data = (dsi_pll_res->cache_pll_trim_codes[0] & 0x3f) | BIT(5);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_KVCO_CODE, reg_data);
+	reg_data = dsi_pll_res->cache_pll_trim_codes[0];
+	reg_data |= BIT(5);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+		MMSS_DSI_PHY_PLL_KVCO_CODE, reg_data);
 
-	reg_data = (dsi_pll_res->cache_pll_trim_codes[1] & 0x7f) | BIT(7);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_VCO_TUNE, reg_data);
+	reg_data = dsi_pll_res->cache_pll_trim_codes[1] << 2;
+	reg_data |= BIT(7);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+		MMSS_DSI_PHY_PLL_PLL_VCOTAIL_EN, reg_data);
+
+	reg_data = dsi_pll_res->cache_pll_trim_codes[3];
+	reg_data |= BIT(5);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+		MMSS_DSI_PHY_PLL_RES_CODE_UP, reg_data);
+
+	reg_data = dsi_pll_res->cache_pll_trim_codes[4];
+	reg_data |= BIT(5);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+		MMSS_DSI_PHY_PLL_RES_CODE_DN, reg_data);
+
 }
-
 
 int set_bypass_lp_div_mux_sel(struct mux_clk *clk, int sel)
 {
@@ -201,19 +219,12 @@ int set_bypass_lp_div_mux_sel(struct mux_clk *clk, int sel)
 	pr_debug("bypass_lp_div mux set to %s mode\n",
 				sel ? "indirect" : "direct");
 
-	pr_debug("POST_DIVIDER_CONTROL = 0x%x\n",
-		MDSS_PLL_REG_R(dsi_pll_res->pll_base,
-			MMSS_DSI_PHY_PLL_POST_DIVIDER_CONTROL));
-
 	reg_data = MDSS_PLL_REG_R(dsi_pll_res->pll_base,
 			MMSS_DSI_PHY_PLL_POST_DIVIDER_CONTROL);
 	reg_data |= BIT(7);
 	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
 			MMSS_DSI_PHY_PLL_POST_DIVIDER_CONTROL,
-			reg_data | (sel << 5));
-	pr_debug("POST_DIVIDER_CONTROL = 0x%x\n",
-		MDSS_PLL_REG_R(dsi_pll_res->pll_base,
-			MMSS_DSI_PHY_PLL_POST_DIVIDER_CONTROL));
+				reg_data | (sel << 5));
 
 	return 0;
 }
@@ -274,6 +285,8 @@ int ndiv_set_div(struct div_clk *clk, int div)
 	int rc, reg_data;
 	struct mdss_pll_resources *dsi_pll_res = clk->priv;
 
+	pr_debug("%d div=%i\n", __LINE__, div);
+
 	rc = mdss_pll_resource_enable(dsi_pll_res, true);
 	if (rc) {
 		pr_err("Failed to enable mdss dsi pll resources\n");
@@ -285,10 +298,6 @@ int ndiv_set_div(struct div_clk *clk, int div)
 	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
 				MMSS_DSI_PHY_PLL_POST_DIVIDER_CONTROL,
 				reg_data | div);
-
-	pr_debug("POST_DIVIDER_CONTROL = 0x%x\n",
-		MDSS_PLL_REG_R(dsi_pll_res->pll_base,
-			MMSS_DSI_PHY_PLL_POST_DIVIDER_CONTROL));
 
 	mdss_pll_resource_enable(dsi_pll_res, false);
 	return rc;
@@ -406,13 +415,9 @@ int hr_oclk3_set_div(struct div_clk *clk, int div)
 		return rc;
 	}
 
-	pr_debug("%d div = %d\n", __LINE__, div);
 	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
 				MMSS_DSI_PHY_PLL_HR_OCLK3_DIVIDER,
 				(div - 1));
-	pr_debug("%s: HR_OCLK3_DIVIDER = 0x%x\n", __func__,
-		MDSS_PLL_REG_R(dsi_pll_res->pll_base,
-			MMSS_DSI_PHY_PLL_HR_OCLK3_DIVIDER));
 
 	mdss_pll_resource_enable(dsi_pll_res, false);
 	return rc;
@@ -459,10 +464,10 @@ int hr_oclk3_get_div(struct div_clk *clk)
 	return div + 1;
 }
 
-static bool pll_20nm_is_pll_locked(struct mdss_pll_resources *dsi_pll_res)
+int dsi_20nm_pll_lock_status(struct mdss_pll_resources *dsi_pll_res)
 {
 	u32 status;
-	bool pll_locked;
+	int pll_locked;
 
 	/* poll for PLL ready status */
 	if (readl_poll_timeout_noirq((dsi_pll_res->pll_base +
@@ -472,17 +477,17 @@ static bool pll_20nm_is_pll_locked(struct mdss_pll_resources *dsi_pll_res)
 			DSI_PLL_POLL_MAX_READS,
 			DSI_PLL_POLL_TIMEOUT_US)) {
 		pr_debug("DSI PLL status=%x failed to Lock\n", status);
-		pll_locked = false;
+		pll_locked = 0;
 	} else if (readl_poll_timeout_noirq((dsi_pll_res->pll_base +
 				MMSS_DSI_PHY_PLL_RESET_SM),
 				status,
 				((status & BIT(6)) > 0),
 				DSI_PLL_POLL_MAX_READS,
 				DSI_PLL_POLL_TIMEOUT_US)) {
-		pr_debug("DSI PLL status=%x PLl not ready\n", status);
-		pll_locked = false;
+			pr_debug("DSI PLL status=%x PLl not ready\n", status);
+			pll_locked = 0;
 	} else {
-		pll_locked = true;
+		pll_locked = 1;
 	}
 
 	return pll_locked;
@@ -496,21 +501,9 @@ void __dsi_pll_disable(void __iomem *pll_base)
 	}
 	pr_debug("Disabling PHY PLL for PLL_BASE=%p\n", pll_base);
 
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_VCOTAIL_EN, 0x02);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_RESETSM_CNTRL3, 0x06);
-}
-
-static void pll_20nm_config_powerdown(void __iomem *pll_base)
-{
-	if (!pll_base) {
-		pr_err("Invalid pll base.\n");
-		return;
-	}
-
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_SYS_CLK_CTRL, 0x00);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_CMN_MODE, 0x01);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_VCOTAIL_EN, 0x82);
+	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_VCOTAIL_EN, 0x042);
 	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_BIAS_EN_CLKBUFLR_EN, 0x02);
+	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_RESETSM_CNTRL3, 0x02);
 }
 
 static int dsi_pll_enable(struct clk *c)
@@ -535,7 +528,7 @@ static int dsi_pll_enable(struct clk *c)
 	}
 	/* Disable PLL1 to avoid current leakage while toggling MDSS GDSC */
 	if (dsi_pll_res->pll_1_base)
-		pll_20nm_config_powerdown(dsi_pll_res->pll_1_base);
+		__dsi_pll_disable(dsi_pll_res->pll_1_base);
 
 	if (rc) {
 		mdss_pll_resource_enable(dsi_pll_res, false);
@@ -563,62 +556,160 @@ static void dsi_pll_disable(struct clk *c)
 
 	/* Disable PLL1 to avoid current leakage while toggling MDSS GDSC */
 	if (dsi_pll_res->pll_1_base)
-		pll_20nm_config_powerdown(dsi_pll_res->pll_1_base);
-
-	pll_20nm_config_powerdown(dsi_pll_res->pll_base);
+		__dsi_pll_disable(dsi_pll_res->pll_1_base);
 
 	mdss_pll_resource_enable(dsi_pll_res, false);
-
 	dsi_pll_res->pll_on = false;
 
 	pr_debug("DSI PLL Disabled\n");
 	return;
 }
 
-static void pll_20nm_config_common_block_1(void __iomem *pll_base)
+static inline void pll_20nm_phy_reset_state_machine_ctrl
+			(struct mdss_pll_resources *dsi_pll_res)
 {
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_VCOTAIL_EN, 0x82);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_BIAS_EN_CLKBUFLR_EN, 0x2a);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_BIAS_EN_CLKBUFLR_EN, 0x2b);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_RESETSM_CNTRL3, 0x02);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RES_CODE_START_SEG1, 0x64);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RES_CODE_START_SEG2, 0x64);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RES_TRIM_CONTROL, 0x15);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RESETSM_CNTRL, 0x20);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RESETSM_CNTRL2, 0x07);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RESETSM_CNTRL3, 0x02);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RESETSM_CNTRL3, 0x03);
 }
 
-static void pll_20nm_config_common_block_2(void __iomem *pll_base)
+void dsi_pll_20nm_phy_ctrl_config(struct mdss_pll_resources *dsi_pll_res,
+							int off)
 {
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_SYS_CLK_CTRL, 0x40);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_IE_TRIM, 0x0F);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_IP_TRIM, 0x0F);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_PHSEL_CONTROL, 0x08);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_IPTAT_TRIM_VCCA_TX_SEL, 0x0E);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_BKG_KVCO_CAL_EN, 0x08);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_SYSCLK_EN_SEL_TXBAND, 0x4A);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_DIV_REF1, 0x00);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_DIV_REF2, 0x01);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_CNTRL, 0x07);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_KVCO_CAL_CNTRL, 0x1f);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_KVCO_COUNT1, 0x8A);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_VREF_CFG3, 0x10);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_SSC_EN_CENTER, 0x00);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_FAUX_EN, 0x0C);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_RXTXEPCLK_EN, 0x0a);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_LOW_POWER_RO_CONTROL, 0x0f);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_CMN_MODE, 0x00);
+	pll_20nm_phy_reset_state_machine_ctrl(dsi_pll_res);
+	wmb();
+	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_1 */
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, off + 0x0174, 0x80);
+	udelay(1000);
+
+	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_1 */
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, off + 0x0174, 0x00);
+	/* Strength ctrl 0 */
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, off + 0x0184, 0x77);
+	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_0 */
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, off + 0x0170, 0x7f);
+
+	/* DSI_0_PHY_DSIPHY_GLBL_TEST_CTRL */
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, off + 0x01d4, 0x00);
+
+	/* MMSS_DSI_0_PHY_DSIPHY_CTRL_2 */
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, off + 0x0178, 0x00);
 }
 
-static void pll_20nm_config_loop_bw(void __iomem *pll_base)
+static void pll_20nm_phy_kvco_config(struct dsi_pll_vco_clk *vco)
 {
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_IP_SETI, 0x03);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_CP_SETI, 0x3F);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_IP_SETP, 0x03);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_CP_SETP, 0x1F);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_CRCTRL, 0x77);
+	struct mdss_pll_resources *dsi_pll_res = vco->priv;
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, MMSS_DSI_PHY_PLL_DIV_REF1, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, MMSS_DSI_PHY_PLL_DIV_REF2, 0x01);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_KVCO_COUNT1, 0x8A);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_KVCO_CAL_CNTRL, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_KVCO_CODE, 0x00);
 }
 
-static void pll_20nm_vco_rate_calc(struct mdss_pll_vco_calc *vco_calc,
-	s64 vco_clk_rate, s64 ref_clk_rate)
+static void pll_20nm_phy_loop_bw_config(struct mdss_pll_resources *dsi_pll_res)
+{
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_IP_SETI, 0x03);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_CP_SETI, 0x3F);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_IP_SETP, 0x03);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_CP_SETP, 0x1F);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_CRCTRL, 0x77);
+}
+
+static void pll_20nm_phy_config(struct dsi_pll_vco_clk *vco)
+{
+	struct mdss_pll_resources *dsi_pll_res = vco->priv;
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_SYS_CLK_CTRL, 0x40);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_VCOTAIL_EN, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, MMSS_DSI_PHY_PLL_CMN_MODE, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, MMSS_DSI_PHY_PLL_IE_TRIM, 0x0F);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base, MMSS_DSI_PHY_PLL_IP_TRIM, 0x0F);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_PHSEL_CONTROL, 0x08);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_IPTAT_TRIM_VCCA_TX_SEL, 0x0E);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_PHSEL_DC, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_CORE_CLK_IN_SYNC_SEL, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_BKG_KVCO_CAL_EN, 0x08);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_BIAS_EN_CLKBUFLR_EN, 0x3F);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_ATB_SEL1, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_ATB_SEL2, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_SYSCLK_EN_SEL_TXBAND, 0x4B);
+	udelay(1000);
+	pll_20nm_phy_kvco_config(vco);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_VREF_CFG1, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_VREF_CFG2, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_VREF_CFG3, 0x10);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_VREF_CFG4, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_BGTC, 0x0F);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_TEST_UPDN, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_VCO_TUNE, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_AMP_OS, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_SSC_EN_CENTER, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RES_CODE_UP, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RES_CODE_DN, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RES_CODE_CAL_CSR, 0x00);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_RES_TRIM_EN_VCOCALDONE, 0x0);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_FAUX_EN, 0x0C);
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_PLL_RXTXEPCLK_EN, 0x0F);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+				MMSS_DSI_PHY_PLL_LOW_POWER_RO_CONTROL, 0x0F);
+	udelay(1000);
+	pll_20nm_phy_loop_bw_config(dsi_pll_res);
+}
+
+static void pll_20nm_vco_rate_calc(struct dsi_pll_vco_clk *vco,
+		struct mdss_pll_vco_calc *vco_calc, s64 vco_clk_rate)
 {
 	s64 multiplier = (1 << 20);
-	s64 duration = 1024, pll_comp_val;
+	s64 duration = 128, pll_comp_val;
 	s64 dec_start_multiple, dec_start;
 	s32 div_frac_start;
 	s64 dec_start1, dec_start2;
@@ -626,11 +717,8 @@ static void pll_20nm_vco_rate_calc(struct mdss_pll_vco_calc *vco_calc,
 	s64 pll_plllock_cmp1, pll_plllock_cmp2, pll_plllock_cmp3;
 
 	memset(vco_calc, 0, sizeof(*vco_calc));
-	pr_debug("vco_clk_rate=%lld ref_clk_rate=%lld\n", vco_clk_rate,
-		ref_clk_rate);
-
 	dec_start_multiple = div_s64(vco_clk_rate * multiplier,
-					2 * ref_clk_rate);
+					2 * vco->ref_clk_rate);
 	div_s64_rem(dec_start_multiple,
 			multiplier, &div_frac_start);
 
@@ -640,8 +728,8 @@ static void pll_20nm_vco_rate_calc(struct mdss_pll_vco_calc *vco_calc,
 	div_frac_start1 = (div_frac_start & 0x7f) | BIT(7);
 	div_frac_start2 = ((div_frac_start >> 7) & 0x7f) | BIT(7);
 	div_frac_start3 = ((div_frac_start >> 14) & 0x3f) | BIT(6);
-	pll_comp_val = (div_s64(dec_start_multiple * 2 * duration,
-				10 * multiplier)) - 1;
+	pll_comp_val = div_s64(dec_start_multiple * 2 * (duration - 1),
+				10 * multiplier);
 	pll_plllock_cmp1 = pll_comp_val & 0xff;
 	pll_plllock_cmp2 = (pll_comp_val >> 8) & 0xff;
 	pll_plllock_cmp3 = (pll_comp_val >> 16) & 0xff;
@@ -670,35 +758,59 @@ static void pll_20nm_vco_rate_calc(struct mdss_pll_vco_calc *vco_calc,
 	vco_calc->pll_plllock_cmp3 = pll_plllock_cmp3;
 }
 
-static void pll_20nm_config_vco_rate(void __iomem *pll_base,
-	struct mdss_pll_vco_calc *vco_calc)
-{
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_DIV_FRAC_START1,
-		vco_calc->div_frac_start1);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_DIV_FRAC_START2,
-		vco_calc->div_frac_start2);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_DIV_FRAC_START3,
-		vco_calc->div_frac_start3);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_DEC_START1,
-		vco_calc->dec_start1);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_DEC_START2,
-		vco_calc->dec_start2);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLLLOCK_CMP1,
-		vco_calc->pll_plllock_cmp1);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLLLOCK_CMP2,
-		vco_calc->pll_plllock_cmp2);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLLLOCK_CMP3,
-		vco_calc->pll_plllock_cmp3);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLLLOCK_CMP_EN, 0x01);
-}
-
 int pll_20nm_vco_set_rate(struct dsi_pll_vco_clk *vco, unsigned long rate)
 {
+	s64 vco_clk_rate = rate;
 	struct mdss_pll_resources *dsi_pll_res = vco->priv;
+	struct mdss_pll_vco_calc vco_calc;
 
-	dsi_pll_res->vco_current_rate = rate;
-	dsi_pll_res->vco_ref_clk_rate = vco->ref_clk_rate;
+	pr_debug("vco set rate: %lld\n", vco_clk_rate);
+	pll_20nm_phy_config(vco);
 
+	/* div fraction, start and comp calculations */
+	pll_20nm_vco_rate_calc(vco, &vco_calc, vco_clk_rate);
+
+	/* register programming*/
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+			MMSS_DSI_PHY_PLL_DIV_FRAC_START1,
+			vco_calc.div_frac_start1);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+			MMSS_DSI_PHY_PLL_DIV_FRAC_START2,
+			vco_calc.div_frac_start2);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+			MMSS_DSI_PHY_PLL_DIV_FRAC_START3,
+			vco_calc.div_frac_start3);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+			MMSS_DSI_PHY_PLL_DEC_START1,
+			vco_calc.dec_start1);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+			MMSS_DSI_PHY_PLL_DEC_START2,
+			vco_calc.dec_start2);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+			MMSS_DSI_PHY_PLL_PLLLOCK_CMP1,
+			vco_calc.pll_plllock_cmp1);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+			MMSS_DSI_PHY_PLL_PLLLOCK_CMP2,
+			vco_calc.pll_plllock_cmp2);
+
+	MDSS_PLL_REG_W(dsi_pll_res->pll_base,
+			MMSS_DSI_PHY_PLL_PLLLOCK_CMP3,
+			vco_calc.pll_plllock_cmp3);
+
+	/*
+	 * Make sure that PLL vco configuration is complete
+	 * before controlling the state machine.
+	 */
+	udelay(1000);
+	wmb();
+	if (dsi_pll_res->pll_1_base)
+		__dsi_pll_disable(dsi_pll_res->pll_1_base);
 	return 0;
 }
 
@@ -717,11 +829,9 @@ int shadow_pll_20nm_vco_set_rate(struct dsi_pll_vco_clk *vco,
 
 	pr_debug("req vco set rate: %lld\n", vco_clk_rate);
 
-	pll_20nm_override_trim_codes(dsi_pll_res);
-
+	dsi_dfps_override_trim_codes(dsi_pll_res);
 	/* div fraction, start and comp calculations */
-	pll_20nm_vco_rate_calc(&vco_calc, vco_clk_rate,
-		dsi_pll_res->vco_ref_clk_rate);
+	pll_20nm_vco_rate_calc(vco, &vco_calc, vco_clk_rate);
 
 	MDSS_DYN_PLL_REG_W(dsi_pll_res->dyn_pll_base,
 		MMSS_DSI_DYNAMIC_REFRESH_PLL_CTRL0,
@@ -854,20 +964,13 @@ enum handoff pll_20nm_vco_handoff(struct clk *c)
 		return ret;
 	}
 
-	if (pll_20nm_is_pll_locked(dsi_pll_res)) {
+	if (dsi_20nm_pll_lock_status(dsi_pll_res)) {
 		dsi_pll_res->handoff_resources = true;
 		dsi_pll_res->pll_on = true;
 		c->rate = pll_20nm_vco_get_rate(c);
 		ret = HANDOFF_ENABLED_CLK;
-		dsi_pll_res->vco_locking_rate = c->rate;
-		dsi_pll_res->is_init_locked = true;
-		pll_20nm_cache_trim_codes(dsi_pll_res);
-		pr_debug("handoff vco_locking_rate=0x%llu\n",
-			dsi_pll_res->vco_locking_rate);
 	} else {
 		mdss_pll_resource_enable(dsi_pll_res, false);
-		dsi_pll_res->vco_locking_rate = 0;
-		dsi_pll_res->is_init_locked = false;
 	}
 
 	return ret;
@@ -913,99 +1016,3 @@ void pll_20nm_vco_unprepare(struct clk *c)
 	dsi_pll_disable(c);
 }
 
-static void pll_20nm_config_resetsm(void __iomem *pll_base)
-{
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_RESETSM_CNTRL, 0x24);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_RESETSM_CNTRL2, 0x07);
-}
-
-static void pll_20nm_config_vco_start(void __iomem *pll_base)
-{
-
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_VCOTAIL_EN, 0x03);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_RESETSM_CNTRL3, 0x02);
-	udelay(10);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_RESETSM_CNTRL3, 0x03);
-}
-
-static void pll_20nm_config_bypass_cal(void __iomem *pll_base)
-{
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_RESETSM_CNTRL, 0xac);
-	MDSS_PLL_REG_W(pll_base, MMSS_DSI_PHY_PLL_PLL_BKG_KVCO_CAL_EN, 0x28);
-}
-
-static int pll_20nm_vco_relock(struct mdss_pll_resources *dsi_pll_res)
-{
-	int rc = 0;
-
-	pll_20nm_override_trim_codes(dsi_pll_res);
-	pll_20nm_config_bypass_cal(dsi_pll_res->pll_base);
-	pll_20nm_config_vco_start(dsi_pll_res->pll_base);
-
-	if (!pll_20nm_is_pll_locked(dsi_pll_res)) {
-		pr_err("DSI PLL re-lock failed\n");
-		rc = -EINVAL;
-	}
-
-	return rc;
-}
-
-static int pll_20nm_vco_init_lock(struct mdss_pll_resources *dsi_pll_res)
-{
-	int rc = 0;
-
-	pll_20nm_config_resetsm(dsi_pll_res->pll_base);
-	pll_20nm_config_vco_start(dsi_pll_res->pll_base);
-
-	if (!pll_20nm_is_pll_locked(dsi_pll_res)) {
-		pr_err("DSI PLL init lock failed\n");
-		rc = -EINVAL;
-		goto init_lock_err;
-	}
-
-	pll_20nm_cache_trim_codes(dsi_pll_res);
-
-init_lock_err:
-	return rc;
-}
-
-int pll_20nm_vco_enable_seq(struct mdss_pll_resources *dsi_pll_res)
-{
-	int rc = 0;
-	struct mdss_pll_vco_calc vco_calc;
-
-	if (!dsi_pll_res) {
-		pr_err("Invalid PLL resources\n");
-		return -EINVAL;
-	}
-
-	pll_20nm_config_common_block_1(dsi_pll_res->pll_1_base);
-	pll_20nm_config_common_block_1(dsi_pll_res->pll_base);
-	pll_20nm_config_common_block_2(dsi_pll_res->pll_base);
-	pll_20nm_config_loop_bw(dsi_pll_res->pll_base);
-
-	pll_20nm_vco_rate_calc(&vco_calc, dsi_pll_res->vco_current_rate,
-		dsi_pll_res->vco_ref_clk_rate);
-	pll_20nm_config_vco_rate(dsi_pll_res->pll_base, &vco_calc);
-
-	pr_debug("init lock=%d prev vco_rate=%llu, new vco_rate=%llu\n",
-		dsi_pll_res->is_init_locked, dsi_pll_res->vco_locking_rate,
-		dsi_pll_res->vco_current_rate);
-	/*
-	 * Run auto-lock sequence if it is either bootup initial
-	 * locking or when the vco rate is changed. Otherwise, just
-	 * use stored codes and bypass caliberation.
-	 */
-	if (!dsi_pll_res->is_init_locked || (dsi_pll_res->vco_locking_rate !=
-			dsi_pll_res->vco_current_rate)) {
-		rc = pll_20nm_vco_init_lock(dsi_pll_res);
-		dsi_pll_res->is_init_locked = (rc) ? false : true;
-	} else {
-		rc = pll_20nm_vco_relock(dsi_pll_res);
-	}
-
-	dsi_pll_res->vco_locking_rate = (rc) ? 0 :
-		dsi_pll_res->vco_current_rate;
-
-	return rc;
-}

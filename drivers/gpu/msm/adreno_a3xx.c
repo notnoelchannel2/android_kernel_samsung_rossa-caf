@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -41,10 +41,10 @@ const unsigned int a3xx_registers[] = {
 	/* CP REGISTERS */
 	0x01c0, 0x01c1, 0x01c3, 0x01c5, 0x01c7, 0x01c7, 0x01c9, 0x01ca,
 	0x01cc, 0x01cd, 0x01d4, 0x01dd, 0x01ea, 0x01ea, 0x01ec, 0x01f1,
-	0x01f5, 0x01fa, 0x01fc, 0x01ff, 0x0440, 0x0440, 0x0443, 0x0443,
-	0x0445, 0x0445, 0x044d, 0x044f, 0x0452, 0x046f, 0x047c, 0x047c,
-	0x047f, 0x047f, 0x0578, 0x057f, 0x0600, 0x0602, 0x0605, 0x0607,
-	0x060a, 0x060e, 0x0612, 0x0614,
+	0x01f5, 0x01f6, 0x01f8, 0x01f9, 0x01fc, 0x01ff, 0x0440, 0x0440,
+	0x0443, 0x0443, 0x0445, 0x0445, 0x044d, 0x044f, 0x0452, 0x046f,
+	0x047c, 0x047c, 0x047f, 0x047f, 0x0578, 0x057f, 0x0600, 0x0602,
+	0x0605, 0x0607, 0x060a, 0x060e, 0x0612, 0x0614,
 	/* VSC REGISTERS */
 	0x0c01, 0x0c02, 0x0c06, 0x0c1d,
 	/* PC REGISTERS */
@@ -706,27 +706,6 @@ int adreno_a3xx_pwron_fixup_init(struct adreno_device *adreno_dev)
 	/* Mark the flag in ->priv to show that we have the fix */
 	set_bit(ADRENO_DEVICE_PWRON_FIXUP, &adreno_dev->priv);
 	return 0;
-}
-
-/*
- * a3xx_gpudev_init() - Initialize gpudev specific fields
- * @adreno_dev: Pointer to adreno device
- */
-void a3xx_gpudev_init(struct adreno_device *adreno_dev)
-{
-	struct adreno_gpudev *gpudev;
-	const struct adreno_reg_offsets *reg_offsets;
-
-	if (adreno_is_a306(adreno_dev)) {
-		gpudev = ADRENO_GPU_DEVICE(adreno_dev);
-		reg_offsets = gpudev->reg_offsets;
-		reg_offsets->offsets[ADRENO_REG_VBIF_XIN_HALT_CTRL0] =
-			A3XX_VBIF2_XIN_HALT_CTRL0;
-		reg_offsets->offsets[ADRENO_REG_VBIF_XIN_HALT_CTRL1] =
-			A3XX_VBIF2_XIN_HALT_CTRL1;
-		gpudev->vbif_xin_halt_ctrl0_mask =
-				A3XX_VBIF2_XIN_HALT_CTRL0_MASK;
-	}
 }
 
 /*
@@ -2053,10 +2032,6 @@ static unsigned int a3xx_register_offsets[ADRENO_REG_REGISTER_MAX] = {
 				A3XX_RBBM_PERFCTR_LOAD_VALUE_LO),
 	ADRENO_REG_DEFINE(ADRENO_REG_RBBM_PERFCTR_LOAD_VALUE_HI,
 				A3XX_RBBM_PERFCTR_LOAD_VALUE_HI),
-	ADRENO_REG_DEFINE(ADRENO_REG_VBIF_XIN_HALT_CTRL0,
-				A3XX_VBIF_XIN_HALT_CTRL0),
-	ADRENO_REG_DEFINE(ADRENO_REG_VBIF_XIN_HALT_CTRL1,
-				A3XX_VBIF_XIN_HALT_CTRL1),
 };
 
 const struct adreno_reg_offsets a3xx_reg_offsets = {
@@ -2090,9 +2065,7 @@ struct adreno_gpudev adreno_a3xx_gpudev = {
 	.irq_trace = trace_kgsl_a3xx_irq_status,
 	.snapshot_data = &a3xx_snapshot_data,
 	.num_prio_levels = 1,
-	.vbif_xin_halt_ctrl0_mask = A3XX_VBIF_XIN_HALT_CTRL0_MASK,
 
-	.gpudev_init = a3xx_gpudev_init,
 	.rb_init = a3xx_rb_init,
 	.perfcounter_init = a3xx_perfcounter_init,
 	.busy_cycles = a3xx_busy_cycles,

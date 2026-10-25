@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -136,36 +136,6 @@ struct ipa_modem_mem_info_type_v01 {
 	/*	Size of the block allocated for the modem driver */
 };  /* Type */
 
-struct ipa_hdr_proc_ctx_tbl_info_type_v01 {
-
-	uint32_t modem_offset_start;
-	/*  Offset from the start of IPA shared memory from which the modem
-	 *	driver may insert header processing context table entries.
-	 */
-
-	uint32_t modem_offset_end;
-	/*  Offset from the start of IPA shared memory beyond which the modem
-	 *	driver may not insert header proc table entries. The space
-	 *	available for the modem driver includes modem_offset_start and
-	 *	modem_offset_end.
-	 */
-};  /* Type */
-
-struct ipa_zip_tbl_info_type_v01 {
-
-	uint32_t modem_offset_start;
-	/*  Offset from the start of IPA shared memory from which the modem
-	 *	driver may insert compression/decompression command entries.
-	 */
-
-	uint32_t modem_offset_end;
-	/*  Offset from the start of IPA shared memory beyond which the modem
-	 *	driver may not insert compression/decompression command entries.
-	 *	The space available for the modem driver includes
-	 *  modem_offset_start and modem_offset_end.
-	 */
-};  /* Type */
-
 /** Request Message; Requests the modem IPA driver to perform initializtion */
 struct ipa_init_modem_driver_req_msg_v01 {
 
@@ -248,21 +218,6 @@ struct ipa_init_modem_driver_req_msg_v01 {
 	 *	initialization.
 	 */
 
-	/* Optional */
-	/*  Header Processing Context Table Information */
-	uint8_t hdr_proc_ctx_tbl_info_valid;
-	/* Must be set to true if hdr_proc_ctx_tbl_info is being passed */
-	struct ipa_hdr_proc_ctx_tbl_info_type_v01 hdr_proc_ctx_tbl_info;
-	/* Provides information about the header processing context table.
-	*/
-
-	/* Optional */
-	/*  Compression Decompression Table Information */
-	uint8_t zip_tbl_info_valid;
-	/* Must be set to true if zip_tbl_info is being passed */
-	struct ipa_zip_tbl_info_type_v01 zip_tbl_info;
-	/* Provides information about the header processing context table.
-	*/
 };  /* Message */
 
 /* Response Message; Requests the modem IPA driver about initializtion */
@@ -753,75 +708,7 @@ struct ipa_fltr_installed_notif_resp_msg_v01 {
 	/* Mandatory */
 	/*  Result Code */
 	struct ipa_qmi_response_type_v01 resp;
-	/*	Standard response type */
-};  /* Message */
-
-/* Request Message; Notifies the remote driver of the need to clear the data
- * path to prevent the IPA from being blocked at the head of the processing
- * pipeline
- */
-struct ipa_enable_force_clear_datapath_req_msg_v01 {
-	/* Mandatory */
-	/*  Pipe Mask */
-	uint32_t source_pipe_bitmask;
-	/* Set of consumer (source) pipes that must be clear of
-	 * active data transfers.
-	 */
-
-	/* Mandatory */
-	/* Request ID */
-	uint32_t request_id;
-	/* Identifies the ID of the request that is sent to the server
-	 * The same request ID is used in the message to remove the force_clear
-	 * request. The server is expected to keep track of the request ID and
-	 * the source_pipe_bitmask so that it can revert as needed
-	 */
-
-	/* Optional */
-	/*  Source Throttle State */
-	uint8_t throttle_source_valid;
-	/* Must be set to true if throttle_source is being passed */
-	uint8_t throttle_source;
-	/*  Specifies whether the server is to throttle the data from
-	 *	these consumer (source) pipes after clearing the exisiting
-	 *	data present in the IPA that were pulled from these pipes
-	 *	The server is expected to put all the source pipes in the
-	 *	source_pipe_bitmask in the same state
-	 */
-};  /* Message */
-
-/* Response Message; Notifies the remote driver of the need to clear the
- * data path to prevent the IPA from being blocked at the head of the
- * processing pipeline
- */
-struct ipa_enable_force_clear_datapath_resp_msg_v01 {
-	/* Mandatory */
-	/*  Result Code */
-	struct ipa_qmi_response_type_v01 resp;
-	/* Standard response type */
-};  /* Message */
-
-/* Request Message; Notifies the remote driver that the forceful clearing
- * of the data path can be lifted
- */
-struct ipa_disable_force_clear_datapath_req_msg_v01 {
-	/* Mandatory */
-	/* Request ID */
-	uint32_t request_id;
-	/* Identifies the request that was sent to the server to
-	 * forcibly clear the data path. This request simply undoes
-	 * the operation done in that request
-	 */
-};  /* Message */
-
-/* Response Message; Notifies the remote driver that the forceful clearing
- * of the data path can be lifted
- */
-struct ipa_disable_force_clear_datapath_resp_msg_v01 {
-	/* Mandatory */
-	/*  Result Code */
-	struct ipa_qmi_response_type_v01 resp;
-	/* Standard response type */
+	/*	Standard response type.*/
 };  /* Message */
 
 enum ipa_peripheral_speed_enum_v01 {
@@ -1035,15 +922,11 @@ struct ipa_config_resp_msg_v01 {
 #define QMI_IPA_INSTALL_FILTER_RULE_RESP_V01 0x0023
 #define QMI_IPA_FILTER_INSTALLED_NOTIF_REQ_V01 0x0024
 #define QMI_IPA_FILTER_INSTALLED_NOTIF_RESP_V01 0x0024
-#define QMI_IPA_ENABLE_FORCE_CLEAR_DATAPATH_REQ_V01 0x0025
-#define QMI_IPA_ENABLE_FORCE_CLEAR_DATAPATH_RESP_V01 0x0025
-#define QMI_IPA_DISABLE_FORCE_CLEAR_DATAPATH_REQ_V01 0x0026
-#define QMI_IPA_DISABLE_FORCE_CLEAR_DATAPATH_RESP_V01 0x0026
 #define QMI_IPA_CONFIG_REQ_V01 0x0027
 #define QMI_IPA_CONFIG_RESP_V01 0x0027
 
 /* add for max length*/
-#define QMI_IPA_INIT_MODEM_DRIVER_REQ_MAX_MSG_LEN_V01 98
+#define QMI_IPA_INIT_MODEM_DRIVER_REQ_MAX_MSG_LEN_V01 76
 #define QMI_IPA_INIT_MODEM_DRIVER_RESP_MAX_MSG_LEN_V01 21
 #define QMI_IPA_INDICATION_REGISTER_REQ_MAX_MSG_LEN_V01 4
 #define QMI_IPA_INDICATION_REGISTER_RESP_MAX_MSG_LEN_V01 7
@@ -1052,12 +935,6 @@ struct ipa_config_resp_msg_v01 {
 #define QMI_IPA_FILTER_INSTALLED_NOTIF_REQ_MAX_MSG_LEN_V01 546
 #define QMI_IPA_FILTER_INSTALLED_NOTIF_RESP_MAX_MSG_LEN_V01 7
 #define QMI_IPA_MASTER_DRIVER_INIT_COMPLETE_IND_MAX_MSG_LEN_V01 7
-
-#define QMI_IPA_ENABLE_FORCE_CLEAR_DATAPATH_REQ_MAX_MSG_LEN_V01 18
-#define QMI_IPA_DISABLE_FORCE_CLEAR_DATAPATH_REQ_MAX_MSG_LEN_V01 7
-#define QMI_IPA_ENABLE_FORCE_CLEAR_DATAPATH_RESP_MAX_MSG_LEN_V01 7
-#define QMI_IPA_DISABLE_FORCE_CLEAR_DATAPATH_RESP_MAX_MSG_LEN_V01 7
-
 
 #define QMI_IPA_CONFIG_REQ_MAX_MSG_LEN_V01 81
 #define QMI_IPA_CONFIG_RESP_MAX_MSG_LEN_V01 7

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,7 +26,6 @@
 #include "mdss_panel.h"
 
 #define MAX_DRV_SUP_MMB_BLKS	44
-#define MAX_DRV_SUP_PIPES 10
 
 #define MDSS_PINCTRL_STATE_DEFAULT "mdss_default"
 #define MDSS_PINCTRL_STATE_SLEEP  "mdss_sleep"
@@ -99,11 +98,6 @@ struct mdss_prefill_data {
 	u32 fbc_lines;
 };
 
-struct mdss_mdp_ppb {
-	u32 ctl_off;
-	u32 cfg_off;
-};
-
 enum mdss_hw_index {
 	MDSS_HW_MDP,
 	MDSS_HW_DSI0 = 1,
@@ -120,11 +114,6 @@ enum mdss_bus_clients {
 	MDSS_MAX_BUS_CLIENTS
 };
 
-enum mdss_hw_quirk {
-	MDSS_QUIRK_BWCPANIC,
-	MDSS_QUIRK_MAX,
-};
-
 struct mdss_data_type {
 	u32 mdp_rev;
 	struct clk *mdp_clk[MDSS_MAX_CLK];
@@ -135,6 +124,9 @@ struct mdss_data_type {
 	u32 max_mdp_clk_rate;
 	struct mdss_util_intf *mdss_util;
 
+	char __iomem *mdss_base;
+	size_t mdp_reg_size;
+
 	struct platform_device *pdev;
 	struct dss_io_data mdss_io;
 	struct dss_io_data vbif_io;
@@ -143,18 +135,7 @@ struct mdss_data_type {
 
 	struct mutex reg_lock;
 
-	/* bitmap to track pipes that have BWC enabled */
-	DECLARE_BITMAP(bwc_enable_map, MAX_DRV_SUP_PIPES);
-	/* bitmap to track hw workarounds */
-	DECLARE_BITMAP(mdss_quirk_map, MDSS_QUIRK_MAX);
-	/* bitmap to track total mmbs in use */
-	DECLARE_BITMAP(mmb_alloc_map, MAX_DRV_SUP_MMB_BLKS);
-
 	u32 has_bwc;
-	u32 default_panic_lut0;
-	u32 default_panic_lut1;
-	u32 default_robust_lut;
-
 	u32 has_decimation;
 	bool has_fixed_qos_arbiter_enabled;
 	bool has_panic_ctrl;
@@ -165,12 +146,11 @@ struct mdss_data_type {
 	u8 has_non_scalar_rgb;
 	bool has_src_split;
 	bool idle_pc_enabled;
-	bool has_pingpong_split;
+	bool has_dst_split;
 	bool has_pixel_ram;
 	bool needs_hist_vote;
 
 	u32 rotator_ot_limit;
-	u32 default_ot_limit;
 	u32 mdp_irq_mask;
 	u32 mdp_hist_irq_mask;
 
@@ -208,6 +188,7 @@ struct mdss_data_type {
 	struct mdss_fudge_factor ab_factor;
 	struct mdss_fudge_factor ib_factor;
 	struct mdss_fudge_factor ib_factor_overlap;
+	struct mdss_fudge_factor ib_factor_cmd;
 	struct mdss_fudge_factor clk_factor;
 
 	u32 disable_prefill;
@@ -216,7 +197,6 @@ struct mdss_data_type {
 
 	u32 enable_bw_release;
 	u32 enable_rotator_bw_release;
-	u32 serialize_wait4pp;
 
 	struct mdss_hw_settings *hw_settings;
 
@@ -230,15 +210,14 @@ struct mdss_data_type {
 	u32 max_target_zorder;
 	u8  ncursor_pipes;
 	u32 max_cursor_size;
-	u32 nppb;
-	struct mdss_mdp_ppb *ppb;
+
+	DECLARE_BITMAP(mmb_alloc_map, MAX_DRV_SUP_MMB_BLKS);
 
 	struct mdss_mdp_mixer *mixer_intf;
 	struct mdss_mdp_mixer *mixer_wb;
 	u32 nmixers_intf;
 	u32 nmixers_wb;
 	u32 max_mixer_width;
-	u32 max_pipe_width;
 
 	struct mdss_mdp_ctl *ctl_off;
 	u32 nctl;
@@ -277,7 +256,6 @@ struct mdss_data_type {
 	u32 latency_buff_per;
 	atomic_t active_intf_cnt;
 	bool has_rot_dwnscale;
-	bool regulator_notif_register;
 
 	u64 ab[MDSS_MAX_BUS_CLIENTS];
 	u64 ib[MDSS_MAX_BUS_CLIENTS];
@@ -344,18 +322,6 @@ static inline int mdss_get_sd_client_cnt(void)
 		return 0;
 	else
 		return atomic_read(&mdss_res->sd_client_count);
-}
-
-static inline void mdss_set_quirk(struct mdss_data_type *mdata,
-	enum mdss_hw_quirk bit)
-{
-	set_bit(bit, mdata->mdss_quirk_map);
-}
-
-static inline bool mdss_has_quirk(struct mdss_data_type *mdata,
-	enum mdss_hw_quirk bit)
-{
-	return test_bit(bit, mdata->mdss_quirk_map);
 }
 
 #define MDSS_VBIF_WRITE(mdata, offset, value, nrt_vbif) \

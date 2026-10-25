@@ -62,7 +62,6 @@ static int sdhci_execute_tuning(struct mmc_host *mmc, u32 opcode);
 static void sdhci_tuning_timer(unsigned long data);
 static void sdhci_enable_preset_value(struct sdhci_host *host, bool enable);
 static bool sdhci_check_state(struct sdhci_host *);
-static void sdhci_show_adma_error(struct sdhci_host *host);
 
 #ifdef CONFIG_PM_RUNTIME
 static int sdhci_runtime_pm_get(struct sdhci_host *host);
@@ -104,6 +103,11 @@ static void sdhci_dump_state(struct sdhci_host *host)
 		mmc_hostname(mmc), host->clock, mmc->clk_gated,
 		mmc->claimer->comm, host->pwr);
 	sdhci_dump_rpm_info(host);
+	if (mmc->card) {
+		pr_info("%s: card->cid : %08x%08x%08x%08x\n", mmc_hostname(mmc), 
+			mmc->card->raw_cid[0], mmc->card->raw_cid[1], 
+			mmc->card->raw_cid[2], mmc->card->raw_cid[3]);
+	}
 }
 
 static void sdhci_dumpregs(struct sdhci_host *host)
@@ -270,6 +274,7 @@ static void sdhci_reset(struct sdhci_host *host, u8 mask)
 	if (host->ops->platform_reset_enter)
 		host->ops->platform_reset_enter(host, mask);
 
+ retry_reset:
 	sdhci_writeb(host, mask, SDHCI_SOFTWARE_RESET);
 
 	if (mask & SDHCI_RESET_ALL)
@@ -287,6 +292,26 @@ static void sdhci_reset(struct sdhci_host *host, u8 mask)
 		if (timeout == 0) {
 			pr_err("%s: Reset 0x%x never completed.\n",
 				mmc_hostname(host->mmc), (int)mask);
+			if ((host->quirks2 & SDHCI_QUIRK2_USE_RESET_WORKAROUND)
+					&& host->ops->reset_workaround) {
+				if (!host->reset_wa_applied) {
+					/*
+					 * apply the workaround and issue
+					 * reset again.
+					 */
+					host->ops->reset_workaround(host, 1);
+					host->reset_wa_applied = 1;
+					host->reset_wa_cnt++;
+					goto retry_reset;
+				} else {
+					pr_err("%s: Reset 0x%x failed with workaround\n",
+							mmc_hostname(host->mmc),
+							(int)mask);
+					/* clear the workaround */
+					host->ops->reset_workaround(host, 0);
+					host->reset_wa_applied = 0;
+				}
+			}
 			sdhci_dumpregs(host);
 			return;
 		}
@@ -296,6 +321,15 @@ static void sdhci_reset(struct sdhci_host *host, u8 mask)
 
 	if (host->ops->platform_reset_exit)
 		host->ops->platform_reset_exit(host, mask);
+
+	if ((host->quirks2 & SDHCI_QUIRK2_USE_RESET_WORKAROUND) &&
+			host->ops->reset_workaround && host->reset_wa_applied) {
+		pr_info("%s: Reset 0x%x successful with workaround\n",
+				mmc_hostname(host->mmc), (int)mask);
+		/* clear the workaround */
+		host->ops->reset_workaround(host, 0);
+		host->reset_wa_applied = 0;
+	}
 
 	/* clear pending normal/error interrupt status */
 	sdhci_writel(host, sdhci_readl(host, SDHCI_INT_STATUS),
@@ -1066,14 +1100,8 @@ static void sdhci_set_transfer_mode(struct sdhci_host *host,
 
 	if (data->flags & MMC_DATA_READ) {
 		mode |= SDHCI_TRNS_READ;
-		if (host->ops->toggle_cdr) {
-			if ((cmd->opcode == MMC_SEND_TUNING_BLOCK_HS200) ||
-				(cmd->opcode == MMC_SEND_TUNING_BLOCK_HS400) ||
-				(cmd->opcode == MMC_SEND_TUNING_BLOCK))
-				host->ops->toggle_cdr(host, false);
-			else
-				host->ops->toggle_cdr(host, true);
-		}
+		if (host->ops->toggle_cdr)
+			host->ops->toggle_cdr(host, true);
 	}
 	if (host->ops->toggle_cdr && (data->flags & MMC_DATA_WRITE))
 		host->ops->toggle_cdr(host, false);
@@ -1511,18 +1539,10 @@ static int sdhci_set_power(struct sdhci_host *host, unsigned short power)
 static int sdhci_enable(struct mmc_host *mmc)
 {
 	struct sdhci_host *host = mmc_priv(mmc);
-	u32 pol_index = 0;
 
-	if (unlikely(!host->cpu_dma_latency_us))
-		goto platform_bus_vote;
-
-	if (host->cpu_dma_latency_tbl_sz > 1)
-		pol_index = host->power_policy;
-
-	pm_qos_update_request(&host->pm_qos_req_dma,
-		host->cpu_dma_latency_us[pol_index]);
-
-platform_bus_vote:
+	if (host->cpu_dma_latency_us)
+		pm_qos_update_request(&host->pm_qos_req_dma,
+					host->cpu_dma_latency_us);
 	if (host->ops->platform_bus_voting)
 		host->ops->platform_bus_voting(host, 1);
 
@@ -1532,29 +1552,24 @@ platform_bus_vote:
 static int sdhci_disable(struct mmc_host *mmc)
 {
 	struct sdhci_host *host = mmc_priv(mmc);
-	u32 pol_index = 0;
 
-	if (unlikely(!host->cpu_dma_latency_us))
-		goto platform_bus_vote;
+	if (host->cpu_dma_latency_us) {
+		/*
+		 * In performance mode, release QoS vote after a timeout to
+		 * make sure back-to-back requests don't suffer from latencies
+		 * that are involved to wake CPU from low power modes in cases
+		 * where the CPU goes into low power mode as soon as QoS vote is
+		 * released.
+		 */
+		if (host->power_policy == SDHCI_PERFORMANCE_MODE)
+			pm_qos_update_request_timeout(&host->pm_qos_req_dma,
+					host->cpu_dma_latency_us,
+					host->pm_qos_timeout_us);
+		else
+			pm_qos_update_request(&host->pm_qos_req_dma,
+					PM_QOS_DEFAULT_VALUE);
+	}
 
-	if (host->cpu_dma_latency_tbl_sz > 1)
-		pol_index = host->power_policy;
-	/*
-	 * In performance mode, release QoS vote after a timeout to
-	 * make sure back-to-back requests don't suffer from latencies
-	 * that are involved to wake CPU from low power modes in cases
-	 * where the CPU goes into low power mode as soon as QoS vote is
-	 * released.
-	 */
-	if (host->power_policy == SDHCI_POWER_SAVE_MODE)
-		pm_qos_update_request(&host->pm_qos_req_dma,
-			PM_QOS_DEFAULT_VALUE);
-	else
-		pm_qos_update_request_timeout(&host->pm_qos_req_dma,
-			host->cpu_dma_latency_us[pol_index],
-			host->pm_qos_timeout_us);
-
-platform_bus_vote:
 	if (host->ops->platform_bus_voting)
 		host->ops->platform_bus_voting(host, 0);
 
@@ -1575,9 +1590,6 @@ static int sdhci_notify_load(struct mmc_host *mmc, enum mmc_load state)
 	switch (state) {
 	case MMC_LOAD_HIGH:
 		sdhci_update_power_policy(host, SDHCI_PERFORMANCE_MODE);
-		break;
-	case MMC_LOAD_INIT:
-		sdhci_update_power_policy(host, SDHCI_PERFORMANCE_MODE_INIT);
 		break;
 	case MMC_LOAD_LOW:
 		sdhci_update_power_policy(host, SDHCI_POWER_SAVE_MODE);
@@ -1658,21 +1670,6 @@ static int sdhci_get_tuning_cmd(struct sdhci_host *host)
 	else
 		return MMC_SEND_TUNING_BLOCK;
 }
-
-void sdhci_cfg_irq(struct sdhci_host *host, bool enable, bool sync)
-{
-	if (enable && !host->irq_enabled) {
-		enable_irq(host->irq);
-		host->irq_enabled = true;
-	} else if (!enable && host->irq_enabled) {
-		if (sync)
-			disable_irq(host->irq);
-		else
-			disable_irq_nosync(host->irq);
-		host->irq_enabled = false;
-	}
-}
-EXPORT_SYMBOL(sdhci_cfg_irq);
 
 static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
@@ -1802,6 +1799,17 @@ static void sdhci_cfg_async_intr(struct sdhci_host *host, bool enable)
 			     SDHCI_HOST_CONTROL2);
 }
 
+static void sdhci_cfg_irq(struct sdhci_host *host, bool enable)
+{
+	if (enable && !host->irq_enabled) {
+		enable_irq(host->irq);
+		host->irq_enabled = true;
+	} else if (!enable && host->irq_enabled) {
+		disable_irq_nosync(host->irq);
+		host->irq_enabled = false;
+	}
+}
+
 static void sdhci_do_set_ios(struct sdhci_host *host, struct mmc_ios *ios)
 {
 	unsigned long flags;
@@ -1819,7 +1827,7 @@ static void sdhci_do_set_ios(struct sdhci_host *host, struct mmc_ios *ios)
 
 	spin_lock_irqsave(&host->lock, flags);
 	/* lock is being released intermittently below, hence disable irq */
-	sdhci_cfg_irq(host, false, false);
+	sdhci_cfg_irq(host, false);
 	spin_unlock_irqrestore(&host->lock, flags);
 	if (ios->clock) {
 		sdhci_set_clock(host, ios->clock);
@@ -1859,21 +1867,10 @@ static void sdhci_do_set_ios(struct sdhci_host *host, struct mmc_ios *ios)
 							      vdd_bit);
 			}
 		}
-		/*
-		 * make sure interrupts are enabled, these are the same
-		 * interrupts which get enabled in sdhci_init().
-		 */
-		sdhci_clear_set_irqs(host, 0,
-			SDHCI_INT_BUS_POWER | SDHCI_INT_DATA_END_BIT |
-			SDHCI_INT_DATA_CRC | SDHCI_INT_DATA_TIMEOUT |
-			SDHCI_INT_INDEX |
-			SDHCI_INT_END_BIT | SDHCI_INT_CRC | SDHCI_INT_TIMEOUT |
-			SDHCI_INT_DATA_END | SDHCI_INT_RESPONSE |
-			SDHCI_INT_AUTO_CMD_ERR);
 	}
 	spin_lock_irqsave(&host->lock, flags);
 	if (!host->clock) {
-		sdhci_cfg_irq(host, true, false);
+		sdhci_cfg_irq(host, true);
 		spin_unlock_irqrestore(&host->lock, flags);
 		mutex_unlock(&host->ios_mutex);
 		return;
@@ -2043,13 +2040,6 @@ static void sdhci_do_set_ios(struct sdhci_host *host, struct mmc_ios *ios)
 		vdd_bit = sdhci_set_power(host, -1);
 		if (host->vmmc && vdd_bit != -1)
 			mmc_regulator_set_ocr(host->mmc, host->vmmc, vdd_bit);
-		if ((host->quirks & SDHCI_QUIRK_BROKEN_CARD_DETECTION) ||
-		    (host->mmc->caps & MMC_CAP_NONREMOVABLE)) {
-			/* clear all the pending interrupts */
-			sdhci_writel(host, sdhci_readl(host, SDHCI_INT_STATUS),
-				     SDHCI_INT_STATUS);
-			sdhci_mask_irqs(host, SDHCI_INT_ALL_MASK);
-		}
 	}
 	if (!ios->clock) {
 		if (host->async_int_supp && host->mmc->card &&
@@ -2060,18 +2050,9 @@ static void sdhci_do_set_ios(struct sdhci_host *host, struct mmc_ios *ios)
 		}
 		sdhci_set_clock(host, ios->clock);
 	}
-
-	if (ios->power_mode == MMC_POWER_OFF) {
-		/* Keep interrupt line disabled as card is anyway powered off */
-		if ((host->quirks & SDHCI_QUIRK_BROKEN_CARD_DETECTION) ||
-		    (host->mmc->caps & MMC_CAP_NONREMOVABLE))
-			goto out;
-	}
-
 	spin_lock_irqsave(&host->lock, flags);
-	sdhci_cfg_irq(host, true, false);
+	sdhci_cfg_irq(host, true);
 	spin_unlock_irqrestore(&host->lock, flags);
-out:
 	mmiowb();
 	mutex_unlock(&host->ios_mutex);
 }
@@ -2762,10 +2743,7 @@ static void sdhci_timeout_timer(unsigned long data)
 		if (!host->mrq->cmd->ignore_timeout) {
 			pr_err("%s: Timeout waiting for hardware interrupt.\n",
 			       mmc_hostname(host->mmc));
-			if (host->data)
-				sdhci_show_adma_error(host);
-			else
-				sdhci_dumpregs(host);
+			sdhci_dumpregs(host);
 		}
 
 		if (host->data) {
@@ -3060,7 +3038,7 @@ static irqreturn_t sdhci_irq(int irq, void *dev_id)
 	if (!host->clock && host->mmc->card &&
 	    mmc_card_sdio(host->mmc->card)) {
 		/* SDIO async. interrupt is level-sensitive */
-		sdhci_cfg_irq(host, false, false);
+		sdhci_cfg_irq(host, false);
 		pr_debug("%s: got async-irq: clocks: %d gated: %d host-irq[en:1/dis:0]: %d\n",
 			mmc_hostname(host->mmc), host->clock,
 			host->mmc->clk_gated, host->irq_enabled);
@@ -3072,15 +3050,6 @@ static irqreturn_t sdhci_irq(int irq, void *dev_id)
 					SDHCI_SUSPEND_TIMEOUT);
 		else
 			mmc_signal_sdio_irq(host->mmc);
-		return IRQ_HANDLED;
-	} else if (!host->clock) {
-		/*
-		 * As clocks are disabled, controller registers might not be
-		 * accessible hence return from here.
-		 */
-		pr_err_ratelimited("%s: %s: clocks are disabled !!!\n",
-				   mmc_hostname(host->mmc), __func__);
-		spin_unlock(&host->lock);
 		return IRQ_HANDLED;
 	}
 	intmask = sdhci_readl(host, SDHCI_INT_STATUS);
@@ -3466,7 +3435,9 @@ static void sdhci_set_pmqos_req_type(struct sdhci_host *host)
 	 * little cluster and will update/apply the vote to all the cores in
 	 * the little cluster.
 	 */
-	if (host->pm_qos_req_dma.type == PM_QOS_REQ_AFFINE_IRQ)
+	if (host->pm_qos_req_dma.type == PM_QOS_REQ_AFFINE_CORES)
+		host->pm_qos_req_dma.cpus_affine.bits[0] = 0x0F;
+	else if (host->pm_qos_req_dma.type == PM_QOS_REQ_AFFINE_IRQ)
 		host->pm_qos_req_dma.irq = host->irq;
 }
 #else
@@ -3636,7 +3607,6 @@ int sdhci_add_host(struct sdhci_host *host)
 			>> SDHCI_CLOCK_BASE_SHIFT;
 
 	host->max_clk *= 1000000;
-	sdhci_update_power_policy(host, SDHCI_PERFORMANCE_MODE_INIT);
 	if (host->max_clk == 0 || host->quirks &
 			SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN) {
 		if (!host->ops->get_max_clock) {
@@ -4043,6 +4013,7 @@ int sdhci_add_host(struct sdhci_host *host)
 
 	if (caps[0] & SDHCI_ASYNC_INTR)
 		host->async_int_supp = true;
+	mmc_add_host(mmc);
 
 	if (host->quirks2 & SDHCI_QUIRK2_IGN_DATA_END_BIT_ERROR)
 		sdhci_clear_set_irqs(host, SDHCI_INT_DATA_END_BIT, 0);
@@ -4055,7 +4026,6 @@ int sdhci_add_host(struct sdhci_host *host)
 
 	sdhci_enable_card_detection(host);
 
-	mmc_add_host(mmc);
 	return 0;
 
 #ifdef SDHCI_USE_LEDS_CLASS
@@ -4093,7 +4063,6 @@ void sdhci_remove_host(struct sdhci_host *host, int dead)
 		spin_unlock_irqrestore(&host->lock, flags);
 	}
 
-	sdhci_update_power_policy(host, SDHCI_POWER_SAVE_MODE);
 	sdhci_disable_card_detection(host);
 
 	if (host->cpu_dma_latency_us)

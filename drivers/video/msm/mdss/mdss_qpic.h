@@ -18,7 +18,6 @@
 #include <mach/scm-io.h>
 #include <linux/msm-sps.h>
 
-#include <linux/pinctrl/consumer.h>
 #include "mdss_panel.h"
 #include "mdss_qpic_panel.h"
 
@@ -86,8 +85,6 @@ struct qpic_data_type {
 	struct qpic_panel_io_desc panel_io;
 	u32 bus_handle;
 	struct completion fifo_eof_comp;
-	u32 qpic_is_on;
-	struct clk *qpic_a_clk;
 };
 
 u32 qpic_send_frame(

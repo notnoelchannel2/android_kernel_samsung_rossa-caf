@@ -30,13 +30,9 @@
 #define IPA_GENERIC_AGGR_TIME_LIMIT 1
 #define IPA_GENERIC_AGGR_PKT_LIMIT 0
 #define IPA_GENERIC_RX_POOL_SZ 32
-
-#define IPA_GENERIC_RX_BUFF_BASE_SZ 8192
-#define IPA_REAL_GENERIC_RX_BUFF_SZ (SKB_DATA_ALIGN(\
-		IPA_GENERIC_RX_BUFF_BASE_SZ + NET_SKB_PAD) +\
-		SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
-#define IPA_GENERIC_RX_BUFF_SZ (IPA_GENERIC_RX_BUFF_BASE_SZ -\
-		(IPA_REAL_GENERIC_RX_BUFF_SZ - IPA_GENERIC_RX_BUFF_BASE_SZ))
+/* 8K less the headroom (NET_SKB_PAD) and skb_shared_info which are implicitly
+ * part of the data buffer */
+#define IPA_LAN_RX_BUFF_SZ 7936
 
 #define IPA_WLAN_RX_POOL_SZ 100
 #define IPA_WLAN_RX_POOL_SZ_LOW_WM 5
@@ -264,6 +260,9 @@ static void ipa_wq_handle_tx(struct work_struct *work)
  * @in_atomic:  whether caller is in atomic context
  *
  * - Allocate tx_packet wrapper
+ * - Allocate a bounce buffer due to HW constrains
+ *   (This buffer will be used for the DMA command)
+ * - Copy the data (desc->pyld) to the bounce buffer
  * - transfer data to the IPA
  * - after the transfer was done the SPS will
  *   notify the sending user via ipa_sps_irq_comp_tx()
@@ -290,8 +289,29 @@ int ipa_send_one(struct ipa_sys_context *sys, struct ipa_desc *desc,
 	}
 
 	if (!desc->dma_address_valid) {
-		dma_address = dma_map_single(ipa_ctx->pdev, desc->pyld,
-			desc->len, DMA_TO_DEVICE);
+		if (unlikely(ipa_ctx->ipa_hw_type == IPA_HW_v1_0)) {
+			WARN_ON(desc->len > 512);
+
+			/*
+			 * Due to a HW limitation, we need to make sure that
+			 * the packet does not cross a 1KB boundary
+			 */
+			tx_pkt->bounce = dma_pool_alloc(
+				ipa_ctx->dma_pool,
+				mem_flag, &dma_address);
+			if (!tx_pkt->bounce) {
+				dma_address = 0;
+			} else {
+				WARN_ON(!ipa_straddle_boundary
+					((u32)dma_address,
+					(u32)dma_address + desc->len - 1,
+					1024));
+				memcpy(tx_pkt->bounce, desc->pyld, desc->len);
+			}
+		} else {
+			dma_address = dma_map_single(ipa_ctx->pdev, desc->pyld,
+				desc->len, DMA_TO_DEVICE);
+		}
 	} else {
 		dma_address = desc->dma_address;
 		tx_pkt->no_unmap_dma = true;
@@ -345,7 +365,12 @@ int ipa_send_one(struct ipa_sys_context *sys, struct ipa_desc *desc,
 fail_sps_send:
 	list_del(&tx_pkt->link);
 	spin_unlock_bh(&sys->spinlock);
-	dma_unmap_single(ipa_ctx->pdev, dma_address, desc->len, DMA_TO_DEVICE);
+	if (unlikely(ipa_ctx->ipa_hw_type == IPA_HW_v1_0))
+		dma_pool_free(ipa_ctx->dma_pool, tx_pkt->bounce,
+				dma_address);
+	else
+		dma_unmap_single(ipa_ctx->pdev, dma_address, desc->len,
+				DMA_TO_DEVICE);
 fail_dma_map:
 	kmem_cache_free(ipa_ctx->tx_pkt_wrapper_cache, tx_pkt);
 fail_mem_alloc:
@@ -362,6 +387,8 @@ fail_mem_alloc:
  * This function is used for system-to-bam connection.
  * - SPS driver expect struct sps_transfer which will contain all the data
  *   for a transaction
+ * - The sps_transfer struct will be pointing to bounce buffers for
+ *   its DMA command (immediate command and data)
  * - ipa_tx_pkt_wrapper will be used for each ipa
  *   descriptor (allocated from wrappers cache)
  * - The wrapper struct will be configured for each ipa-desc payload and will
@@ -448,11 +475,35 @@ int ipa_send(struct ipa_sys_context *sys, u32 num_desc, struct ipa_desc *desc,
 		tx_pkt->mem.size = desc[i].len;
 
 		if (!desc->dma_address_valid) {
-			tx_pkt->mem.phys_base =
-				dma_map_single(ipa_ctx->pdev,
-				tx_pkt->mem.base,
-				tx_pkt->mem.size,
-				DMA_TO_DEVICE);
+			if (unlikely(ipa_ctx->ipa_hw_type == IPA_HW_v1_0)) {
+				WARN_ON(tx_pkt->mem.size > 512);
+
+				/*
+				 * Due to a HW limitation, we need to make sure
+				 * that the packet does not cross a
+				 * 1KB boundary
+				 */
+				tx_pkt->bounce =
+				dma_pool_alloc(ipa_ctx->dma_pool,
+					       mem_flag,
+					       &tx_pkt->mem.phys_base);
+				if (!tx_pkt->bounce) {
+					tx_pkt->mem.phys_base = 0;
+				} else {
+					WARN_ON(!ipa_straddle_boundary(
+						(u32)tx_pkt->mem.phys_base,
+						(u32)tx_pkt->mem.phys_base +
+						tx_pkt->mem.size - 1, 1024));
+					memcpy(tx_pkt->bounce, tx_pkt->mem.base,
+						tx_pkt->mem.size);
+				}
+			} else {
+				tx_pkt->mem.phys_base =
+					dma_map_single(ipa_ctx->pdev,
+					tx_pkt->mem.base,
+					tx_pkt->mem.size,
+					DMA_TO_DEVICE);
+			}
 		} else {
 			tx_pkt->mem.phys_base = desc->dma_address;
 			tx_pkt->no_unmap_dma = true;
@@ -470,7 +521,7 @@ int ipa_send(struct ipa_sys_context *sys, u32 num_desc, struct ipa_desc *desc,
 		tx_pkt->user2 = desc[i].user2;
 
 		/*
-		 * Point the iovec to the buffer and
+		 * Point the iovec to the bounce buffer and
 		 * add this packet to system pipe context.
 		 */
 		iovec->addr = tx_pkt->mem.phys_base;
@@ -510,9 +561,14 @@ failure:
 	for (j = 0; j < i; j++) {
 		next_pkt = list_next_entry(tx_pkt, link);
 		list_del(&tx_pkt->link);
-		dma_unmap_single(ipa_ctx->pdev, tx_pkt->mem.phys_base,
-				tx_pkt->mem.size,
-				DMA_TO_DEVICE);
+		if (unlikely(ipa_ctx->ipa_hw_type == IPA_HW_v1_0))
+			dma_pool_free(ipa_ctx->dma_pool,
+					tx_pkt->bounce,
+					tx_pkt->mem.phys_base);
+		else
+			dma_unmap_single(ipa_ctx->pdev, tx_pkt->mem.phys_base,
+					tx_pkt->mem.size,
+					DMA_TO_DEVICE);
 		kmem_cache_free(ipa_ctx->tx_pkt_wrapper_cache, tx_pkt);
 		tx_pkt = next_pkt;
 	}
@@ -1177,8 +1233,6 @@ int ipa_teardown_sys_pipe(u32 clnt_hdl)
 			  ep->connect.desc.base,
 			  ep->connect.desc.phys_base);
 	sps_free_endpoint(ep->ep_hdl);
-	if (ep->sys->repl_wq)
-		flush_workqueue(ep->sys->repl_wq);
 	if (IPA_CLIENT_IS_CONS(ep->client))
 		ipa_cleanup_rx(ep->sys);
 
@@ -1374,7 +1428,7 @@ static void ipa_wq_repl_rx(struct work_struct *work)
 	struct ipa_sys_context *sys;
 	void *ptr;
 	struct ipa_rx_pkt_wrapper *rx_pkt;
-	gfp_t flag = GFP_KERNEL;
+	gfp_t flag = GFP_NOWAIT | __GFP_NOWARN;
 	u32 next;
 	u32 curr;
 
@@ -1390,8 +1444,7 @@ begin:
 		rx_pkt = kmem_cache_zalloc(ipa_ctx->rx_pkt_wrapper_cache,
 					   flag);
 		if (!rx_pkt) {
-			pr_err_ratelimited("%s fail alloc rx wrapper sys=%p\n",
-					__func__, sys);
+			IPAERR("failed to alloc rx wrapper\n");
 			goto fail_kmem_cache_alloc;
 		}
 
@@ -1401,8 +1454,7 @@ begin:
 
 		rx_pkt->data.skb = sys->get_skb(sys->rx_buff_sz, flag);
 		if (rx_pkt->data.skb == NULL) {
-			pr_err_ratelimited("%s fail alloc skb sys=%p\n",
-					__func__, sys);
+			IPAERR("failed to alloc skb\n");
 			goto fail_skb_alloc;
 		}
 		ptr = skb_put(rx_pkt->data.skb, sys->rx_buff_sz);
@@ -1411,9 +1463,8 @@ begin:
 						     DMA_FROM_DEVICE);
 		if (rx_pkt->data.dma_addr == 0 ||
 				rx_pkt->data.dma_addr == ~0) {
-			pr_err_ratelimited("%s dma map fail %p for %p sys=%p\n",
-			       __func__, (void *)rx_pkt->data.dma_addr,
-			       ptr, sys);
+			IPAERR("dma_map_single failure %p for %p\n",
+			       (void *)rx_pkt->data.dma_addr, ptr);
 			goto fail_dma_mapping;
 		}
 
@@ -1438,8 +1489,6 @@ fail_kmem_cache_alloc:
 			IPA_STATS_INC_CNT(ipa_ctx->stats.lan_repl_rx_empty);
 		else
 			WARN_ON(1);
-		pr_err_ratelimited("%s sys=%p repl ring empty\n",
-				__func__, sys);
 		goto begin;
 	}
 }
@@ -1666,7 +1715,7 @@ fail_skb_alloc:
 fail_kmem_cache_alloc:
 	if (rx_len_cached == 0)
 		queue_delayed_work(sys->wq, &sys->replenish_rx_work,
-				msecs_to_jiffies(1));
+				msecs_to_jiffies(10));
 }
 
 static void ipa_fast_replenish_rx_cache(struct ipa_sys_context *sys)
@@ -1722,9 +1771,7 @@ static void replenish_rx_work_func(struct work_struct *work)
 	struct ipa_sys_context *sys;
 	dwork = container_of(work, struct delayed_work, work);
 	sys = container_of(dwork, struct ipa_sys_context, replenish_rx_work);
-	ipa_inc_client_enable_clks();
 	sys->repl_hdlr(sys);
-	ipa_dec_client_disable_clks();
 }
 
 /**
@@ -1735,8 +1782,6 @@ static void ipa_cleanup_rx(struct ipa_sys_context *sys)
 {
 	struct ipa_rx_pkt_wrapper *rx_pkt;
 	struct ipa_rx_pkt_wrapper *r;
-	u32 head;
-	u32 tail;
 
 	list_for_each_entry_safe(rx_pkt, r,
 				 &sys->head_desc_list, link) {
@@ -1745,20 +1790,6 @@ static void ipa_cleanup_rx(struct ipa_sys_context *sys)
 			sys->rx_buff_sz, DMA_FROM_DEVICE);
 		sys->free_skb(rx_pkt->data.skb);
 		kmem_cache_free(ipa_ctx->rx_pkt_wrapper_cache, rx_pkt);
-	}
-
-	if (sys->repl.cache) {
-		head = atomic_read(&sys->repl.head_idx);
-		tail = atomic_read(&sys->repl.tail_idx);
-		while (head != tail) {
-			rx_pkt = sys->repl.cache[head];
-			dma_unmap_single(ipa_ctx->pdev, rx_pkt->data.dma_addr,
-					sys->rx_buff_sz, DMA_FROM_DEVICE);
-			sys->free_skb(rx_pkt->data.skb);
-			kmem_cache_free(ipa_ctx->rx_pkt_wrapper_cache, rx_pkt);
-			head = (head + 1) % sys->repl.capacity;
-		}
-		kfree(sys->repl.cache);
 	}
 }
 
@@ -2463,7 +2494,7 @@ static int ipa_assign_policy(struct ipa_sys_connect_params *in,
 						replenish_rx_work_func);
 				INIT_WORK(&sys->repl_work, ipa_wq_repl_rx);
 				atomic_set(&sys->curr_polling_state, 0);
-				sys->rx_buff_sz = IPA_GENERIC_RX_BUFF_SZ;
+				sys->rx_buff_sz = IPA_LAN_RX_BUFF_SZ;
 				sys->rx_pool_sz = IPA_GENERIC_RX_POOL_SZ;
 				sys->get_skb = ipa_get_skb_ipa_rx;
 				sys->free_skb = ipa_free_skb_rx;
@@ -2526,10 +2557,7 @@ static int ipa_assign_policy(struct ipa_sys_connect_params *in,
 					replenish_rx_work_func);
 				atomic_set(&sys->curr_polling_state, 0);
 				sys->rx_buff_sz = IPA_ODU_RX_BUFF_SZ;
-				sys->rx_pool_sz = in->desc_fifo_sz /
-					sizeof(struct sps_iovec) - 1;
-				if (sys->rx_pool_sz > IPA_ODU_RX_POOL_SZ)
-					sys->rx_pool_sz = IPA_ODU_RX_POOL_SZ;
+				sys->rx_pool_sz = IPA_ODU_RX_POOL_SZ;
 				sys->pyld_hdlr = ipa_odu_rx_pyld_hdlr;
 				sys->get_skb = ipa_get_skb_ipa_rx;
 				sys->free_skb = ipa_free_skb_rx;

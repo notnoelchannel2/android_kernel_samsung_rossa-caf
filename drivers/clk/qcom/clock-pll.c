@@ -43,8 +43,6 @@
 							(x)->config_ctl_reg)
 #define PLL_TEST_CTL_LO_REG(x)	(*(x)->base + (unsigned long) \
 							(x)->test_ctl_lo_reg)
-#define PLL_TEST_CTL_HI_REG(x)	(*(x)->base + (unsigned long) \
-							(x)->test_ctl_hi_reg)
 static DEFINE_SPINLOCK(pll_reg_lock);
 
 #define ENABLE_WAIT_MAX_LOOPS 200
@@ -243,12 +241,6 @@ static void __variable_rate_pll_init(struct clk *c)
 
 	writel_relaxed(pll->vals.alpha_val, PLL_ALPHA_REG(pll));
 	writel_relaxed(pll->vals.config_ctl_val, PLL_CFG_CTL_REG(pll));
-	if (pll->init_test_ctl) {
-		writel_relaxed(pll->vals.test_ctl_lo_val,
-				PLL_TEST_CTL_LO_REG(pll));
-		writel_relaxed(pll->vals.test_ctl_hi_val,
-				PLL_TEST_CTL_HI_REG(pll));
-	}
 
 	pll->inited = true;
 }
@@ -269,8 +261,7 @@ static int variable_rate_pll_clk_enable(struct clk *c)
 	mode = readl_relaxed(PLL_MODE_REG(pll));
 
 	/* Set test control bits as required by HW doc */
-	if (pll->test_ctl_lo_reg && pll->vals.test_ctl_lo_val &&
-		pll->pgm_test_ctl_enable)
+	if (pll->test_ctl_lo_reg && pll->vals.test_ctl_lo_val)
 		writel_relaxed(pll->vals.test_ctl_lo_val,
 				PLL_TEST_CTL_LO_REG(pll));
 
@@ -289,32 +280,18 @@ static int variable_rate_pll_clk_enable(struct clk *c)
 	mode |= PLL_RESET_N;
 	writel_relaxed(mode, PLL_MODE_REG(pll));
 
-	/*
-	 * 5us delay mandated by HPG. However, put in a 50us delay here.
-	 * This is to address possible locking issues with the PLL exhibit
-	 * early "transient" locks about 16us from this point. With this
-	 * higher delay, we avoid running into those transients.
-	 */
+	/* 5us delay mandated by HPG. Use 10 to be sure. */
 	mb();
-	udelay(50);
+	udelay(10);
 
 	/* Clear test control bits */
-	if (pll->test_ctl_lo_reg && pll->vals.test_ctl_lo_val &&
-		pll->pgm_test_ctl_enable)
+	if (pll->test_ctl_lo_reg && pll->vals.test_ctl_lo_val)
 		writel_relaxed(0x0, PLL_TEST_CTL_LO_REG(pll));
 
 	/* Wait for pll to lock. */
 	for (count = ENABLE_WAIT_MAX_LOOPS; count > 0; count--) {
-		if (readl_relaxed(PLL_STATUS_REG(pll)) & lockmask) {
-			udelay(1);
-			/*
-			 * Check again to be sure. This is to avoid
-			 * breaking too early if there is a "transient"
-			 * lock.
-			 */
-			if ((readl_relaxed(PLL_STATUS_REG(pll)) & lockmask))
-				break;
-		}
+		if (readl_relaxed(PLL_STATUS_REG(pll)) & lockmask)
+			break;
 		udelay(1);
 	}
 
@@ -508,9 +485,6 @@ static long variable_rate_pll_round_rate(struct clk *c, unsigned long rate)
 
 	if (!pll->src_rate)
 		return 0;
-
-	if (pll->no_prepared_reconfig && c->prepare_count && c->rate != rate)
-		return -EINVAL;
 
 	if (rate < pll->min_rate)
 		rate = pll->min_rate;

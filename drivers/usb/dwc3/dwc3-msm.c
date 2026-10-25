@@ -165,6 +165,7 @@ struct dwc3_msm {
 	bool			resume_pending;
 	atomic_t                pm_suspended;
 	int			hs_phy_irq;
+	bool			hs_phy_irq_seen;
 	struct delayed_work	resume_work;
 	struct work_struct	restart_usb_work;
 	struct work_struct	usb_block_reset_work;
@@ -896,8 +897,6 @@ static void dwc3_restart_usb_work(struct work_struct *w)
 		return;
 	}
 
-	dbg_event(0xFF, "RestartUSB", 0);
-
 	/* Reset active USB connection */
 	mdwc->ext_xceiv.bsv = false;
 	queue_delayed_work(system_nrt_wq, &mdwc->resume_work, 0);
@@ -1120,25 +1119,15 @@ static void dwc3_msm_qscratch_reg_init(struct dwc3_msm *mdwc)
 static void dwc3_msm_notify_event(struct dwc3 *dwc, unsigned event)
 {
 	struct dwc3_msm *mdwc = dev_get_drvdata(dwc->dev->parent);
-	u32 reg;
 
 	if (dwc->revision < DWC3_REVISION_230A)
 		return;
 
 	switch (event) {
 	case DWC3_CONTROLLER_ERROR_EVENT:
-		dev_info(mdwc->dev,
-			"DWC3_CONTROLLER_ERROR_EVENT received, irq cnt %lu\n",
-			dwc->irq_cnt);
-
+		dev_info(mdwc->dev, "DWC3_CONTROLLER_ERROR_EVENT received\n");
 		dwc3_msm_dump_phy_info(mdwc);
 		dwc3_gadget_disable_irq(dwc);
-
-		/* prevent core from generating interrupts until recovery */
-		reg = dwc3_msm_read_reg(mdwc->base, DWC3_GCTL);
-		reg |= DWC3_GCTL_CORESOFTRESET;
-		dwc3_msm_write_reg(mdwc->base, DWC3_GCTL, reg);
-
 		/*
 		 * schedule work for doing block reset for recovery from erratic
 		 * error event.
@@ -1227,11 +1216,9 @@ static void dwc3_block_reset_usb_work(struct work_struct *w)
 	unsigned long flags;
 
 	dev_dbg(mdwc->dev, "%s\n", __func__);
+
 	dwc3_msm_block_reset(&mdwc->ext_xceiv, true);
-	if (mdwc->ext_xceiv.bsv) {
-		dbg_event(0xFF, "BR EnEVT", 0);
-		dwc3_gadget_enable_irq(dwc);
-	}
+	dwc3_gadget_enable_irq(dwc);
 	spin_lock_irqsave(&dwc->lock, flags);
 	dwc->err_evt_seen = 0;
 	spin_unlock_irqrestore(&dwc->lock, flags);
@@ -1524,6 +1511,9 @@ static void dwc3_msm_wake_interrupt_enable(struct dwc3_msm *mdwc, bool on)
 {
 	u32 irq_mask;
 
+	if (!mdwc->pwr_event_irq)
+		return;
+
 	if (on) {
 		/* Enable P3 and L2 OUT events */
 		irq_mask = dwc3_msm_read_reg(mdwc->base, PWR_EVNT_IRQ_MASK_REG);
@@ -1579,9 +1569,8 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 		for (i = 0; i < dwc->num_event_buffers; i++) {
 			struct dwc3_event_buffer *evt = dwc->ev_buffs[i];
 			if ((evt->flags & DWC3_EVENT_PENDING)) {
-				dev_dbg(mdwc->dev,
-				"%s: %d device events pending, abort suspend\n",
-				__func__, evt->count / 4);
+				dev_warn(mdwc->dev, "%s: %d device events pending, abort suspend\n",
+					__func__, evt->count / 4);
 				dbg_print_reg("PENDING DEVICE EVENT",
 						*(u32 *)(evt->buf + evt->lpos));
 				return -EBUSY;
@@ -1657,19 +1646,15 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 			return ret;
 	}
 
-	/* Disable core irq */
-	if (dwc->irq)
-		disable_irq(dwc->irq);
+	if (mdwc->hs_phy_irq && !mdwc->pwr_event_irq)
+		disable_irq(mdwc->hs_phy_irq);
 
 	if (!dcp && !host_bus_suspend)
 		dwc3_msm_write_reg(mdwc->base, QSCRATCH_CTRL_REG,
 			mdwc->qscratch_ctl_val);
 
 	/* Enable wakeup from LPM */
-	if (mdwc->pwr_event_irq) {
-		dwc3_msm_wake_interrupt_enable(mdwc, true);
-		enable_irq_wake(mdwc->pwr_event_irq);
-	}
+	dwc3_msm_wake_interrupt_enable(mdwc, true);
 
 	/*
 	 * Marking in LPM before disabling the clocks in order to avoid a
@@ -1678,7 +1663,6 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 	atomic_set(&dwc->in_lpm, 1);
 
 	usb_phy_set_suspend(mdwc->hs_phy, 1);
-
 	if (can_suspend_ssphy) {
 		usb_phy_set_suspend(mdwc->ss_phy, 1);
 		usleep_range(1000, 1200);
@@ -1742,6 +1726,18 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 			enable_irq_wake(mdwc->hs_phy_irq);
 			mdwc->lpm_flags |= MDWC3_ASYNC_IRQ_WAKE_CAPABILITY;
 		}
+
+		/*
+		 * We don't need HS PHY IRQ (other than for wakeup) if PWR
+		 * EVENT IRQ is available
+		 */
+		if (!mdwc->pwr_event_irq)
+			enable_irq(mdwc->hs_phy_irq);
+
+#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
+		if (dcp || !mdwc->vbus_active) // add SAMSUNG
+			disable_irq_wake(mdwc->hs_phy_irq);
+#endif
 	}
 
 	dev_info(mdwc->dev, "DWC3 in low power mode\n");
@@ -1870,29 +1866,31 @@ static int dwc3_msm_resume(struct dwc3_msm *mdwc)
 
 	msm_bam_notify_lpm_resume(DWC3_CTRL);
 	/* disable wakeup from LPM */
-	if (mdwc->pwr_event_irq) {
-		disable_irq_wake(mdwc->pwr_event_irq);
-		dwc3_msm_wake_interrupt_enable(mdwc, false);
-	}
+	dwc3_msm_wake_interrupt_enable(mdwc, false);
 
 	/* Disable HSPHY auto suspend */
 	dwc3_msm_write_reg(mdwc->base, DWC3_GUSB2PHYCFG(0),
 		dwc3_msm_read_reg(mdwc->base, DWC3_GUSB2PHYCFG(0)) &
 				~(DWC3_GUSB2PHYCFG_ENBLSLPM |
 					DWC3_GUSB2PHYCFG_SUSPHY));
-
+	/* match disable_irq call from isr */
+	if (mdwc->hs_phy_irq_seen && mdwc->hs_phy_irq) {
+		enable_irq(mdwc->hs_phy_irq);
+		mdwc->hs_phy_irq_seen = false;
+	}
 	/* Disable wakeup capable for HS_PHY IRQ, if enabled */
 	if (mdwc->hs_phy_irq &&
 			(mdwc->lpm_flags & MDWC3_ASYNC_IRQ_WAKE_CAPABILITY)) {
 			disable_irq_wake(mdwc->hs_phy_irq);
 			mdwc->lpm_flags &= ~MDWC3_ASYNC_IRQ_WAKE_CAPABILITY;
 	}
+	/* it must DCP disconnect, re-enable HS_PHY wakeup IRQ */
+#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
+	if ((mdwc->hs_phy_irq && dcp) || !mdwc->vbus_active) // add SAMSUNG
+		enable_irq_wake(mdwc->hs_phy_irq);
+#endif
 
 	dev_info(mdwc->dev, "DWC3 exited from low power mode\n");
-
-	/* Enable core irq */
-	if (dwc->irq)
-		enable_irq(dwc->irq);
 
 	/*
 	 * Handle other power events that could not have been handled during
@@ -1924,44 +1922,6 @@ static void dwc3_wait_for_ext_chg_done(struct dwc3_msm *mdwc)
 		else
 			dev_dbg(mdwc->dev, "ext chg wait done\n");
 	}
-
-}
-
-static void dwc3_flush_event_buffers(struct dwc3_msm *mdwc)
-{
-	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
-	int i;
-	unsigned long flags;
-
-	/* Only disable/flush all events when cable is disconnected */
-	if (mdwc->ext_xceiv.bsv)
-		return;
-
-	/* Disable all events on cable disconnect */
-	dbg_event(0xFF, "Dis EVT", 0);
-	dwc3_gadget_disable_irq(dwc);
-
-	/* Skip remaining events on disconnect */
-	spin_lock_irqsave(&dwc->lock, flags);
-	for (i = 0; i < dwc->num_event_buffers; i++) {
-		struct dwc3_event_buffer *evt;
-		evt = dwc->ev_buffs[i];
-		evt->lpos = (evt->lpos + evt->count) %
-			DWC3_EVENT_BUFFERS_SIZE;
-		evt->count = 0;
-		evt->flags &= ~DWC3_EVENT_PENDING;
-	}
-	spin_unlock_irqrestore(&dwc->lock, flags);
-
-	/*
-	 * If there is a pending block reset due to erratic event,
-	 * wait for it to complete
-	 */
-	if (dwc->err_evt_seen) {
-		dbg_event(0xFF, "Flush BR", 0);
-		flush_work(&mdwc->usb_block_reset_work);
-		dwc->err_evt_seen = 0;
-	}
 }
 
 static void dwc3_resume_work(struct work_struct *w)
@@ -1974,30 +1934,21 @@ static void dwc3_resume_work(struct work_struct *w)
 	/* handle any event that was queued while work was already running */
 	if (!atomic_read(&dwc->in_lpm)) {
 		dev_dbg(mdwc->dev, "%s: notifying xceiv event\n", __func__);
-		dbg_event(0xFF, "RWrk !lpm", 0);
 		if (mdwc->otg_xceiv) {
 			dwc3_wait_for_ext_chg_done(mdwc);
-			/* Handle erratic events during cable disconnect */
-			dwc3_flush_event_buffers(mdwc);
 			mdwc->ext_xceiv.notify_ext_events(mdwc->otg_xceiv->otg,
 							DWC3_EVENT_XCEIV_STATE);
 		}
 		return;
 	}
 
+	dbg_event(0xFF, "ReWr flag", atomic_read(&mdwc->pm_suspended));
 	/* bail out if system resume in process, else initiate RESUME */
 	if (atomic_read(&mdwc->pm_suspended)) {
-		dbg_event(0xFF, "RWrk PMSus", 0);
 		mdwc->resume_pending = true;
 	} else {
-		dbg_event(0xFF, "RWrk !PMSus", mdwc->otg_xceiv ? 1 : 0);
 		pm_runtime_get_sync(mdwc->dev);
 		if (mdwc->otg_xceiv) {
-			/*
-			 * Handle erratic events during bus suspend and cable
-			 * disconnect
-			 */
-			dwc3_flush_event_buffers(mdwc);
 			mdwc->ext_xceiv.notify_ext_events(mdwc->otg_xceiv->otg,
 							DWC3_EVENT_PHY_RESUME);
 		} else if (mdwc->scope == POWER_SUPPLY_SCOPE_SYSTEM) {
@@ -2005,6 +1956,7 @@ static void dwc3_resume_work(struct work_struct *w)
 			pm_runtime_resume(&dwc->xhci->dev);
 		}
 
+		dbg_event(0xFF, "ReWr Else", mdwc->otg_xceiv ? 1 : 0);
 		pm_runtime_put_noidle(mdwc->dev);
 		if (mdwc->otg_xceiv && (mdwc->ext_xceiv.otg_capability)) {
 			dwc3_wait_for_ext_chg_done(mdwc);
@@ -2084,8 +2036,6 @@ static irqreturn_t msm_dwc3_pwr_irq_thread(int irq, void *_mdwc)
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 
 	dev_dbg(mdwc->dev, "%s\n", __func__);
-	dbg_event(0xFF, "PWR IRQ", atomic_read(&dwc->in_lpm));
-
 	if (atomic_read(&dwc->in_lpm))
 		dwc3_resume_work(&mdwc->resume_work.work);
 	else
@@ -2181,11 +2131,21 @@ error:
 	debugfs_remove_recursive(dwc3_debugfs_root);
 }
 
-static irqreturn_t msm_dwc3_hs_phy_irq(int irq, void *data)
+static irqreturn_t msm_dwc3_irq(int irq, void *data)
 {
+#ifndef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
 	struct dwc3_msm *mdwc = data;
+	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 
-	dev_dbg(mdwc->dev, "%s HS PHY IRQ handled\n", __func__);
+	if (atomic_read(&dwc->in_lpm)) {
+		dev_dbg(mdwc->dev, "%s received in LPM\n", __func__);
+		mdwc->hs_phy_irq_seen = true;
+		disable_irq_nosync(irq);
+		queue_delayed_work(system_nrt_wq, &mdwc->resume_work, 0);
+	} else {
+		pr_info_ratelimited("%s: IRQ outside LPM\n", __func__);
+	}
+#endif
 	return IRQ_HANDLED;
 }
 
@@ -2277,6 +2237,7 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 	static bool init;
 	struct dwc3_msm *mdwc = container_of(psy, struct dwc3_msm,
 								usb_psy);
+	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_USB_OTG:
@@ -2301,15 +2262,17 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 		dev_dbg(mdwc->dev, "%s: notify xceiv event\n", __func__);
 		if (mdwc->otg_xceiv && !mdwc->ext_inuse &&
 		    (mdwc->ext_xceiv.otg_capability || !init)) {
-			if (mdwc->ext_xceiv.bsv == val->intval)
-				break;
-
 			mdwc->ext_xceiv.bsv = val->intval;
+			/*
+			 * Cancel any block reset in progress during disconnect
+			 * and wait for it to finish.
+			 */
+			if (dwc && dwc->err_evt_seen && !mdwc->ext_xceiv.bsv)
+				cancel_work_sync(&mdwc->usb_block_reset_work);
 			/*
 			 * Set debouncing delay to 120ms. Otherwise battery
 			 * charging CDP complaince test fails if delay > 120ms.
 			 */
-			dbg_event(0xFF, "Q RW (vbus)", val->intval);
 			queue_delayed_work(system_nrt_wq,
 							&mdwc->resume_work, 12);
 
@@ -2486,18 +2449,10 @@ static void dwc3_id_work(struct work_struct *w)
 		mdwc->ext_inuse = (ret == 0);
 	}
 
-	if (mdwc->ext_inuse) {
-		/* MHL cable: stop peripheral */
-		mdwc->ext_xceiv.id = DWC3_ID_FLOAT;
-		mdwc->ext_xceiv.bsv = false;
-	} else {
-		/* A cable: start host */
+	if (!mdwc->ext_inuse) { /* notify OTG */
 		mdwc->ext_xceiv.id = mdwc->id_state;
+		dwc3_resume_work(&mdwc->resume_work.work);
 	}
-
-	dbg_event(0xFF, "RW (id)", 0);
-	/* notify OTG */
-	dwc3_resume_work(&mdwc->resume_work.work);
 }
 
 static irqreturn_t dwc3_pmic_id_irq(int irq, void *data)
@@ -2992,13 +2947,13 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	 */
 	mdwc->hs_phy_irq = platform_get_irq_byname(pdev, "hs_phy_irq");
 	if (mdwc->hs_phy_irq < 0) {
-		dev_err(&pdev->dev, "pget_irq for hs_phy_irq failed\n");
-		goto disable_ref_clk;
+		dev_dbg(&pdev->dev, "pget_irq for hs_phy_irq failed\n");
+		mdwc->hs_phy_irq = 0;
 	} else {
 		irq_set_status_flags(mdwc->hs_phy_irq, IRQ_NOAUTOEN);
 		ret = devm_request_irq(&pdev->dev, mdwc->hs_phy_irq,
-				msm_dwc3_hs_phy_irq, IRQF_TRIGGER_RISING,
-			       "msm_hs_phy_irq", mdwc);
+				msm_dwc3_irq, IRQF_TRIGGER_RISING,
+			       "msm_dwc3", mdwc);
 		if (ret) {
 			dev_err(&pdev->dev, "irqreq HSPHYINT failed\n");
 			goto disable_ref_clk;
@@ -3011,8 +2966,8 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	 */
 	mdwc->pwr_event_irq = platform_get_irq_byname(pdev, "pwr_event_irq");
 	if (mdwc->pwr_event_irq < 0) {
-		dev_err(&pdev->dev, "pget_irq for pwr_event_irq failed\n");
-		goto disable_ref_clk;
+		dev_dbg(&pdev->dev, "pget_irq for pwr_event_irq failed\n");
+		mdwc->pwr_event_irq = 0;
 	} else {
 		ret = devm_request_threaded_irq(&pdev->dev, mdwc->pwr_event_irq,
 					msm_dwc3_pwr_irq,
@@ -3140,8 +3095,13 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	/* usb_psy required only for vbus_notifications or charging support */
 	if (mdwc->ext_xceiv.otg_capability ||
 			!mdwc->charger.charging_disabled) {
+#if defined(CONFIG_BATTERY_SAMSUNG)
+		mdwc->usb_psy.name = "dwc-usb";
+		mdwc->usb_psy.type = POWER_SUPPLY_TYPE_UNKNOWN;
+#else
 		mdwc->usb_psy.name = "usb";
 		mdwc->usb_psy.type = POWER_SUPPLY_TYPE_USB;
+#endif
 		mdwc->usb_psy.supplied_to = dwc3_msm_pm_power_supplied_to;
 		mdwc->usb_psy.num_supplicants = ARRAY_SIZE(
 						dwc3_msm_pm_power_supplied_to);
@@ -3309,7 +3269,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	dwc3_msm_write_reg_field(mdwc->base, PWR_EVNT_IRQ_MASK_REG,
 				PWR_EVNT_POWERDOWN_IN_P3_MASK, 1);
 
-	enable_irq(mdwc->hs_phy_irq);
+	/* Don't enable HS PHY IRQ if PWR EVENT IRQ is available */
+	if (!mdwc->pwr_event_irq)
+		enable_irq(mdwc->hs_phy_irq);
 
 	/* Update initial ID state */
 	if (mdwc->pmic_id_irq) {
@@ -3422,7 +3384,7 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 		regulator_disable(mdwc->vbus_otg);
 
 	if (mdwc->hs_phy_irq)
-		disable_irq(mdwc->hs_phy_irq);
+		disable_irq_wake(mdwc->hs_phy_irq);
 	if (mdwc->pwr_event_irq)
 		disable_irq(mdwc->pwr_event_irq);
 
@@ -3485,11 +3447,6 @@ static int dwc3_msm_pm_resume(struct device *dev)
 
 		/* Let OTG know about resume event and update pm_count */
 		if (mdwc->otg_xceiv) {
-			/*
-			 * Handle erratic events on bus suspend, PM suspend
-			 * and cable disconnect
-			 */
-			dwc3_flush_event_buffers(mdwc);
 			mdwc->ext_xceiv.notify_ext_events(mdwc->otg_xceiv->otg,
 							DWC3_EVENT_PHY_RESUME);
 			if (mdwc->ext_xceiv.otg_capability)

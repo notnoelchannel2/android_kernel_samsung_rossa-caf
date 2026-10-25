@@ -131,6 +131,9 @@ static int __maybe_unused two = 2;
 static int __maybe_unused three = 3;
 static unsigned long one_ul = 1;
 static int one_hundred = 100;
+#ifdef CONFIG_INCREASE_MAXIMUM_SWAPPINESS
+static int max_swappiness = 200;
+#endif
 #ifdef CONFIG_PRINTK
 static int ten_thousand = 10000;
 #endif
@@ -145,7 +148,7 @@ static int min_percpu_pagelist_fract = 8;
 
 static int ngroups_max = NGROUPS_MAX;
 static const int cap_last_cap = CAP_LAST_CAP;
-
+unsigned int sysctl_sched_boot_complete_pct = 0;
 /*this is needed for proc_doulongvec_minmax of sysctl_hung_task_timeout_secs */
 #ifdef CONFIG_DETECT_HUNG_TASK
 static unsigned long hung_task_timeout_max = (LONG_MAX/HZ);
@@ -338,6 +341,13 @@ static struct ctl_table kern_table[] = {
 		.proc_handler   = sched_hmp_proc_update_handler,
 	},
 #endif
+	{
+		.procname		= "sched_boot_complete",
+		.data			= &sysctl_sched_boot_complete_pct,
+		.maxlen			= sizeof(int),
+		.mode			= 0644,
+		.proc_handler	= proc_dointvec
+	},
 #ifdef CONFIG_SCHED_HMP
 	{
 		.procname       = "sched_account_wait_time",
@@ -345,13 +355,6 @@ static struct ctl_table kern_table[] = {
 		.maxlen         = sizeof(unsigned int),
 		.mode           = 0644,
 		.proc_handler   = sched_window_update_handler,
-	},
-	{
-		.procname       = "sched_cpu_high_irqload",
-		.data           = &sysctl_sched_cpu_high_irqload,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
 	},
 	{
 		.procname       = "sched_ravg_hist_size",
@@ -373,13 +376,6 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= sched_hmp_proc_update_handler,
-	},
-	{
-		.procname	= "sched_min_runtime",
-		.data		= &sysctl_sched_min_runtime,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler   = sched_hmp_proc_update_handler,
 	},
 	{
 		.procname	= "sched_spill_load",
@@ -414,7 +410,14 @@ static struct ctl_table kern_table[] = {
 		.data		= &sysctl_sched_upmigrate_min_nice,
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
-		.proc_handler	= sched_hmp_proc_update_handler,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "sched_prefer_idle",
+		.data		= &sysctl_sched_prefer_idle,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
 	},
 	{
 		.procname	= "sched_init_task_load",
@@ -436,13 +439,6 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= sched_boost_handler,
-	},
-	{
-		.procname	= "sched_enable_power_aware",
-		.data		= &sysctl_sched_enable_power_aware,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
 	},
 #endif	/* CONFIG_SCHED_HMP */
 #ifdef CONFIG_SCHED_DEBUG
@@ -1372,7 +1368,11 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
+#ifdef CONFIG_INCREASE_MAXIMUM_SWAPPINESS
+		.extra2		= &max_swappiness,
+#else
 		.extra2		= &one_hundred,
+#endif
 	},
 #ifdef CONFIG_HUGETLB_PAGE
 	{
@@ -1440,7 +1440,7 @@ static struct ctl_table vm_table[] = {
 		.procname	= "compact_memory",
 		.data		= &sysctl_compact_memory,
 		.maxlen		= sizeof(int),
-		.mode		= 0200,
+		.mode		= 0644,
 		.proc_handler	= sysctl_compaction_handler,
 	},
 	{
@@ -1827,6 +1827,20 @@ static struct ctl_table fs_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &pipe_proc_fn,
 		.extra1		= &pipe_min_size,
+	},
+	{
+		.procname	= "pipe-user-pages-hard",
+		.data		= &pipe_user_pages_hard,
+		.maxlen		= sizeof(pipe_user_pages_hard),
+		.mode		= 0644,
+		.proc_handler	= proc_doulongvec_minmax,
+	},
+	{
+		.procname	= "pipe-user-pages-soft",
+		.data		= &pipe_user_pages_soft,
+		.maxlen		= sizeof(pipe_user_pages_soft),
+		.mode		= 0644,
+		.proc_handler	= proc_doulongvec_minmax,
 	},
 	{ }
 };
@@ -2797,6 +2811,11 @@ int proc_do_large_bitmap(struct ctl_table *table, int write,
 }
 
 #else /* CONFIG_PROC_SYSCTL */
+int is_boot_complete(void)
+{
+	return sysctl_sched_boot_complete_pct;
+}
+EXPORT_SYMBOL(is_boot_complete);
 
 int proc_dostring(struct ctl_table *table, int write,
 		  void __user *buffer, size_t *lenp, loff_t *ppos)

@@ -55,7 +55,7 @@
 #define APDS993X_COE_C	70	/* 0.70 without glass window */
 #define APDS993X_COE_D	142	/* 1.42 without glass window */
 #define APDS993X_DF	52
-#define ALS_MAX_RANGE	40000
+#define ALS_MAX_RANGE	60000
 
 #define APDS_CAL_SKIP_COUNT     5
 #define APDS_MAX_CAL	(10 + APDS_CAL_SKIP_COUNT)
@@ -291,7 +291,7 @@ static struct sensors_classdev sensors_light_cdev = {
 	.max_range = "60000",
 	.resolution = "0.0125",
 	.sensor_power = "0.20",
-	.min_delay = 30000, /* in microseconds */
+	.min_delay = 0, /* in microseconds */
 	.fifo_reserved_event_count = 0,
 	.fifo_max_event_count = 0,
 	.enabled = 0,
@@ -312,10 +312,9 @@ static struct sensors_classdev sensors_proximity_cdev = {
 	.max_range = "5",
 	.resolution = "5.0",
 	.sensor_power = "3",
-	.min_delay = 30000, /* in microseconds */
+	.min_delay = 0, /* in microseconds */
 	.fifo_reserved_event_count = 0,
 	.fifo_max_event_count = 0,
-	.flags = 1,
 	.enabled = 0,
 	.delay_msec = 100,
 	.sensors_enable = NULL,
@@ -706,9 +705,15 @@ static int LuxCalculation(struct i2c_client *client, int ch0data, int ch1data)
 		return -1; 	/* don't report first, change gain may help */
 	}
 
-	luxValue = ((IAC * apds993x_ga * APDS993X_DF) / 100) /
-		((apds993x_als_integration_tb[data->als_atime_index] /
-		  100) * apds993x_als_again_tb[data->als_again_index]);
+	if (data->als_reduce) {
+		luxValue = ((IAC * apds993x_ga * APDS993X_DF) / 100) * 65 / 10 /
+			((apds993x_als_integration_tb[data->als_atime_index] /
+			  100) * apds993x_als_again_tb[data->als_again_index]);
+	} else {
+		luxValue = ((IAC * apds993x_ga * APDS993X_DF) /100) /
+			((apds993x_als_integration_tb[data->als_atime_index] /
+			  100) * apds993x_als_again_tb[data->als_again_index]);
+	}
 
 	return luxValue;
 }
@@ -765,6 +770,7 @@ static void apds993x_change_als_threshold(struct i2c_client *client)
 	struct apds993x_data *data = i2c_get_clientdata(client);
 	int ch0data, ch1data, v;
 	int luxValue=0;
+	int err;
 	unsigned char change_again=0;
 	unsigned char control_data=0;
 	unsigned char lux_is_valid=1;
@@ -784,6 +790,8 @@ static void apds993x_change_als_threshold(struct i2c_client *client)
 		/* don't report, the lux is invalid value */
 		lux_is_valid = 0;
 		luxValue = data->als_prev_lux;
+		if (data->als_reduce)
+			lux_is_valid = 1;
 			/* report anyway since this is the lowest gain */
 	}
 
@@ -850,11 +858,22 @@ static void apds993x_change_als_threshold(struct i2c_client *client)
 		if (data->als_again_index != APDS993X_ALS_GAIN_1X) {
 			data->als_again_index--;
 			change_again = 1;
+		} else {
+			err = i2c_smbus_write_byte_data(client,
+					CMD_BYTE|APDS993X_CONFIG_REG,
+					APDS993X_ALS_REDUCE);
+			if (err >= 0)
+				data->als_reduce = 1;
 		}
 	} else if (data->als_data <=
 		   ((apds993x_als_res_tb[data->als_atime_index] * 10) / 100)) {
 		/* increase AGAIN if possible */
-		if (data->als_again_index != APDS993X_ALS_GAIN_120X) {
+		if (data->als_reduce) {
+			err = i2c_smbus_write_byte_data(client,
+					CMD_BYTE|APDS993X_CONFIG_REG, 0);
+			if (err >= 0)
+				data->als_reduce = 0;
+		} else if (data->als_again_index != APDS993X_ALS_GAIN_120X) {
 			data->als_again_index++;
 			change_again = 1;
 		}
@@ -898,6 +917,7 @@ static void apds993x_als_polling_work_handler(struct work_struct *work)
 	struct i2c_client *client=data->client;
 	int ch0data, ch1data, pdata, v;
 	int luxValue=0;
+	int err;
 	unsigned char change_again=0;
 	unsigned char control_data=0;
 	unsigned char lux_is_valid=1;
@@ -919,6 +939,8 @@ static void apds993x_als_polling_work_handler(struct work_struct *work)
 		/* don't report, this is invalid lux value */
 		lux_is_valid = 0;
 		luxValue = data->als_prev_lux;
+		if (data->als_reduce)
+			lux_is_valid = 1;
 			/* report anyway since this is the lowest gain */
 	}
 	/*
@@ -972,11 +994,22 @@ static void apds993x_als_polling_work_handler(struct work_struct *work)
 		if (data->als_again_index != APDS993X_ALS_GAIN_1X) {
 			data->als_again_index--;
 			change_again = 1;
+		} else {
+			err = i2c_smbus_write_byte_data(client,
+					CMD_BYTE|APDS993X_CONFIG_REG,
+					APDS993X_ALS_REDUCE);
+			if (err >= 0)
+				data->als_reduce = 1;
 		}
 	} else if (data->als_data <=
 		   (apds993x_als_res_tb[data->als_atime_index] * 10) / 100) {
 		/* increase AGAIN if possible */
-		if (data->als_again_index != APDS993X_ALS_GAIN_120X) {
+		if (data->als_reduce) {
+			err = i2c_smbus_write_byte_data(client,
+					CMD_BYTE|APDS993X_CONFIG_REG, 0);
+			if (err >= 0)
+				data->als_reduce = 0;
+		} else if (data->als_again_index != APDS993X_ALS_GAIN_120X) {
 			data->als_again_index++;
 			change_again = 1;
 		}
@@ -1203,9 +1236,9 @@ static int apds993x_set_als_poll_delay(struct i2c_client *client,
 	pr_debug("%s: val=%d\n", __func__, val);
 	mutex_lock(&data->op_mutex);
 
-	/* minimum 30ms */
-	if (val < 30)
-		val = 30;
+	/* minimum 3ms */
+	if (val < 3)
+		val = 3;
 	data->als_poll_delay = val;
 
 	if (data->als_poll_delay >= 100)
@@ -2590,14 +2623,14 @@ static int apds993x_probe(struct i2c_client *client,
 	}
 
 	/* Register to Input Device */
-	data->input_dev_als = devm_input_allocate_device(&client->dev);
+	data->input_dev_als = input_allocate_device();
 	if (!data->input_dev_als) {
 		err = -ENOMEM;
 		pr_err("%s: Failed to allocate input device als\n", __func__);
 		goto exit_free_irq;
 	}
 
-	data->input_dev_ps = devm_input_allocate_device(&client->dev);
+	data->input_dev_ps = input_allocate_device();
 	if (!data->input_dev_ps) {
 		err = -ENOMEM;
 		pr_err("%s: Failed to allocate input device ps\n", __func__);
@@ -2626,13 +2659,13 @@ static int apds993x_probe(struct i2c_client *client,
 		err = -ENOMEM;
 		pr_err("%s: Unable to register input device ps: %s\n",
 				__func__, data->input_dev_ps->name);
-		goto exit_free_dev_ps;
+		goto exit_unregister_dev_als;
 	}
 
 	/* Register sysfs hooks */
 	err = sysfs_create_group(&client->dev.kobj, &apds993x_attr_group);
 	if (err)
-		goto exit_free_dev_ps;
+		goto exit_unregister_dev_ps;
 
 	/* Register for sensor ioctl */
 	err = misc_register(&apds993x_ps_device);
@@ -2695,6 +2728,10 @@ exit_unregister_ps_ioctl:
 	misc_deregister(&apds993x_ps_device);
 exit_remove_sysfs_group:
 	sysfs_remove_group(&client->dev.kobj, &apds993x_attr_group);
+exit_unregister_dev_ps:
+	input_unregister_device(data->input_dev_ps);
+exit_unregister_dev_als:
+	input_unregister_device(data->input_dev_als);
 exit_free_dev_ps:
 exit_free_dev_als:
 exit_free_irq:
@@ -2723,6 +2760,9 @@ static int apds993x_remove(struct i2c_client *client)
 	misc_deregister(&apds993x_ps_device);
 
 	sysfs_remove_group(&client->dev.kobj, &apds993x_attr_group);
+
+	input_unregister_device(data->input_dev_ps);
+	input_unregister_device(data->input_dev_als);
 
 	free_irq(client->irq, data);
 

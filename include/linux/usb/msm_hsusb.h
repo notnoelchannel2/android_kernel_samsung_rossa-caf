@@ -102,7 +102,6 @@ enum msm_usb_phy_type {
 	CI_PHY,			/* not supported */
 	SNPS_PICO_PHY,
 	SNPS_FEMTO_PHY,
-	QUSB_ULPI_PHY,
 };
 
 #define IDEV_CHG_MAX	1500
@@ -357,8 +356,6 @@ struct msm_otg_platform_data {
  * @pdata: otg device platform data.
  * @irq: IRQ number assigned for HSUSB controller.
  * @async_irq: IRQ number used by some controllers during low power state
- * @phy_irq: IRQ number assigned for PHY to notify events like id and line
-		state changes.
  * @pclk: clock struct of iface_clk.
  * @core_clk: clock struct of core_bus_clk.
  * @sleep_clk: clock struct of sleep_clk for USB PHY.
@@ -382,7 +379,6 @@ struct msm_otg_platform_data {
  * @in_lpm: indicates low power mode (LPM) state.
  * @async_int: IRQ line on which ASYNC interrupt arrived in LPM.
  * @cur_power: The amount of mA available from downstream port.
- * @otg_wq: Strict order otg workqueue for OTG works (SM/ID/SUSPEND).
  * @chg_work: Charger detection work.
  * @chg_state: The state of charger detection process.
  * @chg_type: The type of charger attached.
@@ -404,21 +400,17 @@ struct msm_otg_platform_data {
  * @chg_check_timer: The timer used to implement the workaround to detect
  *               very slow plug in of wall charger.
  * @ui_enabled: USB Intterupt is enabled or disabled.
- * @is_ext_chg_dcp: To indicate whether charger detected by external entity
-		SMB hardware is DCP charger or not.
  * @pm_done: It is used to increment the pm counter using pm_runtime_get_sync.
 	     This handles the race case when PM resume thread returns before
 	     the charger detection starts. When USB is disconnected and in lpm
 	     pm_done is set to true.
  * @ext_id_irq: IRQ for ID interrupt.
- * @phy_irq_pending: Gets set when PHY IRQ arrives in LPM.
  */
 struct msm_otg {
 	struct usb_phy phy;
 	struct msm_otg_platform_data *pdata;
 	int irq;
 	int async_irq;
-	int phy_irq;
 	struct clk *xo_clk;
 	struct clk *pclk;
 	struct clk *core_clk;
@@ -427,7 +419,6 @@ struct msm_otg {
 	struct clk *phy_por_clk;
 	struct clk *phy_csr_clk;
 	struct clk *bus_clks[USB_NUM_BUS_CLOCKS];
-	struct clk *phy_ref_clk;
 	long core_clk_rate;
 	struct resource *io_res;
 	void __iomem *regs;
@@ -459,10 +450,8 @@ struct msm_otg {
 	struct notifier_block pm_notify;
 	atomic_t in_lpm;
 	atomic_t set_fpr_with_lpm_exit;
-	bool err_event_seen;
 	int async_int;
 	unsigned cur_power;
-	struct workqueue_struct *otg_wq;
 	struct delayed_work chg_work;
 	struct delayed_work id_status_work;
 	struct delayed_work suspend_work;
@@ -549,11 +538,9 @@ struct msm_otg {
 	struct completion ext_chg_wait;
 	struct pinctrl *phy_pinctrl;
 	int ui_enabled;
-	bool is_ext_chg_dcp;
 	bool pm_done;
 	struct qpnp_vadc_chip	*vadc_dev;
 	int ext_id_irq;
-	bool phy_irq_pending;
 };
 
 struct ci13xxx_platform_data {
@@ -621,7 +608,6 @@ struct msm_usb_host_platform_data {
 	int resume_gpio;
 	int ext_hub_reset_gpio;
 	bool is_uicc;
-	int pm_qos_latency;
 };
 
 /**

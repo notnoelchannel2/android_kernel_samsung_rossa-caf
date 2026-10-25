@@ -40,12 +40,9 @@ extern unsigned int sysctl_sched_wakeup_load_threshold;
 extern unsigned int sysctl_sched_window_stats_policy;
 extern unsigned int sysctl_sched_account_wait_time;
 extern unsigned int sysctl_sched_ravg_hist_size;
-extern unsigned int sysctl_sched_cpu_high_irqload;
 extern unsigned int sysctl_sched_freq_account_wait_time;
 extern unsigned int sysctl_sched_migration_fixup;
 extern unsigned int sysctl_sched_heavy_task_pct;
-extern unsigned int sysctl_sched_min_runtime;
-extern unsigned int sysctl_sched_enable_power_aware;
 
 #if defined(CONFIG_SCHED_FREQ_INPUT) || defined(CONFIG_SCHED_HMP)
 extern unsigned int sysctl_sched_init_task_load_pct;
@@ -63,6 +60,7 @@ extern unsigned int sysctl_sched_small_task_pct;
 extern unsigned int sysctl_sched_upmigrate_pct;
 extern unsigned int sysctl_sched_downmigrate_pct;
 extern int sysctl_sched_upmigrate_min_nice;
+extern unsigned int sysctl_sched_prefer_idle;
 extern unsigned int sysctl_sched_powerband_limit_pct;
 extern unsigned int sysctl_sched_boost;
 

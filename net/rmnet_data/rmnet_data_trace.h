@@ -39,8 +39,8 @@ DECLARE_EVENT_CLASS(rmnet_handler_template,
 		__assign_str(name, skb->dev->name);
 	),
 
-	TP_printk("dev=%s skbaddr=%p len=%u",
-		__get_str(name), __entry->skbaddr, __entry->len)
+	TP_printk("dev=%s skbaddr=%pK len=%u",
+		  __get_str(name), __entry->skbaddr, __entry->len)
 )
 
 DEFINE_EVENT(rmnet_handler_template, rmnet_egress_handler,
@@ -128,8 +128,9 @@ DECLARE_EVENT_CLASS(rmnet_aggregation_template,
 		__entry->num = num_agg_pakcets;
 	),
 
-	TP_printk("dev=%s skbaddr=%p len=%u agg_count: %d",
-		__get_str(name), __entry->skbaddr, __entry->len, __entry->num)
+	TP_printk("dev=%s skbaddr=%pK len=%u agg_count: %d",
+		  __get_str(name), __entry->skbaddr, __entry->len,
+		  __entry->num)
 )
 
 DEFINE_EVENT(rmnet_aggregation_template, rmnet_map_aggregate,
@@ -217,26 +218,6 @@ TRACE_EVENT(rmnet_map_checksum_downlink_packet,
 	),
 
 	TP_printk("DL checksum on dev=%s, res: %d",
-		__get_str(name), __entry->res)
-)
-
-TRACE_EVENT(rmnet_map_checksum_uplink_packet,
-
-	TP_PROTO(struct net_device *dev, int ckresult),
-
-	TP_ARGS(dev, ckresult),
-
-	TP_STRUCT__entry(
-		__string(name, dev->name)
-		__field(int, res)
-	),
-
-	TP_fast_assign(
-		__assign_str(name, dev->name);
-		__entry->res = ckresult;
-	),
-
-	TP_printk("UL checksum on dev=%s, res: %d",
 		__get_str(name), __entry->res)
 )
 

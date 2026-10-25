@@ -44,20 +44,24 @@ static ssize_t power_supply_show_property(struct device *dev,
 					  struct device_attribute *attr,
 					  char *buf) {
 	static char *type_text[] = {
-		"Unknown", "Battery", "UPS", "Mains", "USB", "USB_DCP",
-		"USB_CDP", "USB_ACA", "USB_HVDCP", "Wireless", "BMS",
-		"USB_Parallel", "Wipower"
+		"Unknown", "Battery", "UPS", "Mains", "USB",
+		"USB_DCP", "USB_CDP", "USB_ACA",
+		"BMS", "MISC", "Wireless", "CARDOCK", "UARTOFF", "OTG",
+		"LAN_HUB", "MHL_500", "MHL_900", "MHL_1500", "MHL_2000",
+		"MHL_USB", "MHL_USB_100", "SMART_OTG", "SMART_NOTG", "POWER_SHARING",
+		"HV_Prepare_Mains", "HV_Err", "HV_Unknown", "HV_Mains",
+		"USB_Parallel"
 	};
 	static char *status_text[] = {
 		"Unknown", "Charging", "Discharging", "Not charging", "Full"
 	};
 	static char *charge_type[] = {
-		"Unknown", "N/A", "Trickle", "Fast", "Taper"
+		"Unknown", "N/A", "Trickle", "Fast", "Taper", "Slow"
 	};
 	static char *health_text[] = {
 		"Unknown", "Good", "Overheat", "Warm", "Dead", "Over voltage",
 		"Unspecified failure", "Cold", "Cool", "Watchdog timer expire",
-		"Safety timer expire"
+		"Safety timer expire", "Under voltage", "OverheatLimit"
 	};
 	static char *technology_text[] = {
 		"Unknown", "NiMH", "Li-ion", "Li-poly", "LiFe", "NiCd",
@@ -213,8 +217,6 @@ static struct device_attribute power_supply_attrs[] = {
 	POWER_SUPPLY_ATTR(usb_otg),
 	POWER_SUPPLY_ATTR(charge_enabled),
 	POWER_SUPPLY_ATTR(flash_current_max),
-	POWER_SUPPLY_ATTR(update_now),
-	POWER_SUPPLY_ATTR(esr_count),
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_ATTR(charge_counter_ext),
 	/* Properties of type `const char *' */

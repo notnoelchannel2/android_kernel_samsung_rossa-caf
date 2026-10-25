@@ -26,7 +26,6 @@
 #include <linux/platform_device.h>
 #include <linux/of_platform.h>
 #include <linux/pm_opp.h>
-#include <linux/pm_qos.h>
 
 #include <soc/qcom/scm.h>
 #include <soc/qcom/clock-pll.h>
@@ -34,7 +33,6 @@
 #include <soc/qcom/clock-alpha-pll.h>
 
 #include <dt-bindings/clock/msm-clocks-8994.h>
-#include <dt-bindings/clock/msm-clocks-8992.h>
 
 #include "clock.h"
 #include "vdd-level-8994.h"
@@ -72,7 +70,6 @@ static DEFINE_VDD_REGULATORS(vdd_dig, VDD_DIG_NUM, 1, vdd_corner, NULL);
 #define C0_PLL_CONFIG_CTL 0x14
 #define C0_PLL_STATUS     0x1C
 #define C0_PLL_TEST_CTL_LO 0x20
-#define C0_PLL_TEST_CTL_HI 0x24
 
 #define C0_PLLA_MODE       0x40
 #define C0_PLLA_L_VAL      0x44
@@ -81,7 +78,6 @@ static DEFINE_VDD_REGULATORS(vdd_dig, VDD_DIG_NUM, 1, vdd_corner, NULL);
 #define C0_PLLA_CONFIG_CTL 0x54
 #define C0_PLLA_STATUS     0x5C
 #define C0_PLLA_TEST_CTL_LO 0x60
-#define C0_PLLA_TEST_CTL_HI 0x64
 
 #define C1_PLL_MODE        0x0
 #define C1_PLL_L_VAL       0x4
@@ -90,7 +86,6 @@ static DEFINE_VDD_REGULATORS(vdd_dig, VDD_DIG_NUM, 1, vdd_corner, NULL);
 #define C1_PLL_CONFIG_CTL 0x14
 #define C1_PLL_STATUS     0x1C
 #define C1_PLL_TEST_CTL_LO 0x20
-#define C1_PLL_TEST_CTL_HI 0x24
 
 #define C1_PLLA_MODE       0x40
 #define C1_PLLA_L_VAL      0x44
@@ -99,7 +94,6 @@ static DEFINE_VDD_REGULATORS(vdd_dig, VDD_DIG_NUM, 1, vdd_corner, NULL);
 #define C1_PLLA_CONFIG_CTL 0x54
 #define C1_PLLA_STATUS     0x5C
 #define C1_PLLA_TEST_CTL_LO 0x60
-#define C1_PLLA_TEST_CTL_HI 0x64
 
 #define GLB_CLK_DIAG	0x1C
 #define MUX_OFFSET	0x54
@@ -161,7 +155,6 @@ DEFINE_EXT_CLK(xo_ao, NULL);
 DEFINE_EXT_CLK(sys_apcsaux_clk, NULL);
 
 static bool msm8994_v2;
-static bool msm8992;
 
 static struct pll_clk a57_pll0 = {
 	.mode_reg = (void __iomem *)C1_PLL_MODE,
@@ -171,8 +164,6 @@ static struct pll_clk a57_pll0 = {
 	.config_ctl_reg = (void __iomem *)C1_PLL_CONFIG_CTL,
 	.status_reg = (void __iomem *)C1_PLL_MODE,
 	.test_ctl_lo_reg = (void __iomem *)C1_PLL_TEST_CTL_LO,
-	.test_ctl_hi_reg = (void __iomem *)C1_PLL_TEST_CTL_HI,
-	.pgm_test_ctl_enable = true,
 	.masks = {
 		.pre_div_mask = BIT(12),
 		.post_div_mask = BM(9, 8),
@@ -208,8 +199,6 @@ static struct pll_clk a57_pll1 = {
 	.config_ctl_reg = (void __iomem *)C1_PLLA_CONFIG_CTL,
 	.status_reg = (void __iomem *)C1_PLLA_MODE,
 	.test_ctl_lo_reg = (void __iomem *)C1_PLLA_TEST_CTL_LO,
-	.test_ctl_hi_reg = (void __iomem *)C1_PLLA_TEST_CTL_HI,
-	.pgm_test_ctl_enable = true,
 	.masks = {
 		.pre_div_mask = BIT(12),
 		.post_div_mask = BM(9, 8),
@@ -247,8 +236,6 @@ static struct pll_clk a53_pll0 = {
 	.config_ctl_reg = (void __iomem *)C0_PLL_CONFIG_CTL,
 	.status_reg = (void __iomem *)C0_PLL_MODE,
 	.test_ctl_lo_reg = (void __iomem *)C0_PLL_TEST_CTL_LO,
-	.test_ctl_hi_reg = (void __iomem *)C0_PLL_TEST_CTL_HI,
-	.pgm_test_ctl_enable = true,
 	.masks = {
 		.pre_div_mask = BIT(12),
 		.post_div_mask = BM(9, 8),
@@ -284,8 +271,6 @@ static struct pll_clk a53_pll1 = {
 	.config_ctl_reg = (void __iomem *)C0_PLLA_CONFIG_CTL,
 	.status_reg = (void __iomem *)C0_PLLA_MODE,
 	.test_ctl_lo_reg = (void __iomem *)C0_PLLA_TEST_CTL_LO,
-	.test_ctl_hi_reg = (void __iomem *)C0_PLLA_TEST_CTL_HI,
-	.pgm_test_ctl_enable = true,
 	.masks = {
 		.pre_div_mask = BIT(12),
 		.post_div_mask = BM(9, 8),
@@ -471,13 +456,14 @@ static int cpu_mux_set_sel(struct mux_clk *mux, int sel)
 	mux->en_mask = sel;
 
 	/*
-	 * Don't switch the mux if it isn't enabled. However, if this is a
-	 * request to select the safe source or low power source do it
-	 * unconditionally. This is to allow the safe source to be selected
-	 * during frequency switches even if the mux is disabled (specifically
-	 * on 8994 V1, the LFMUX may be disabled).
+	 * Don't switch the mux if it isn't enabled.
+	 * However, if this is a request to select the safe source
+	 * do it unconditionally. This is to allow the safe source
+	 * to be selected during frequency switches even if the mux
+	 * is disabled (specifically on 8994 V1, the LFMUX may be
+	 * disabled).
 	 */
-	if (!mux->c.count && sel != mux->low_power_sel)
+	if (!mux->c.count && sel != mux->safe_sel)
 		return 0;
 
 	__cpu_mux_set_sel(mux, mux->en_mask);
@@ -504,7 +490,7 @@ static int cpu_mux_enable(struct mux_clk *mux)
 
 static void cpu_mux_disable(struct mux_clk *mux)
 {
-	__cpu_mux_set_sel(mux, mux->low_power_sel);
+	__cpu_mux_set_sel(mux, mux->safe_sel);
 }
 
 static struct clk_mux_ops cpu_mux_ops = {
@@ -522,7 +508,6 @@ static struct mux_clk a53_lf_mux = {
 		{ &xo_ao.c,		  0 },
 	),
 	.safe_parent = &a53_safe_clk.c,
-	.low_power_sel = 1,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
 	.shift = 1,
@@ -543,7 +528,6 @@ static struct mux_clk a53_hf_mux = {
 		{ &sys_apcsaux_clk.c, 2 },
 	),
 	.safe_parent = &a53_lf_mux.c,
-	.low_power_sel = 0,
 	.safe_freq = 199200000,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
@@ -564,7 +548,6 @@ static struct mux_clk a57_lf_mux = {
 		{ &xo_ao.c,               0 },
 	),
 	.safe_parent = &a57_safe_clk.c,
-	.low_power_sel = 1,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
 	.shift = 1,
@@ -585,7 +568,6 @@ static struct mux_clk a57_hf_mux = {
 		{ &sys_apcsaux_clk.c, 2 },
 	),
 	.safe_parent = &a57_lf_mux.c,
-	.low_power_sel = 0,
 	.safe_freq = 199200000,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
@@ -609,12 +591,10 @@ static struct mux_clk a53_lf_mux_v2 = {
 		{ &sys_apcsaux_clk.c, 3 },
 	),
 	.en_mask = 3,
-	.low_power_sel = 3,
+	.safe_parent = &sys_apcsaux_clk.c,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
 	.shift = 1,
-	.try_new_parent = true,
-	.try_get_rate = true,
 	.base = &vbases[ALIAS0_GLB_BASE],
 	.c = {
 		.dbg_name = "a53_lf_mux_v2",
@@ -651,12 +631,11 @@ static struct mux_clk a53_hf_mux_v2 = {
 		{ &a53_pll0.c,       3 },
 	),
 	.en_mask = 0,
-	.low_power_sel = 0,
+	.safe_parent = &a53_lf_mux_div.c,
+	.safe_freq = 300000000,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
 	.shift = 3,
-	.try_new_parent = true,
-	.try_get_rate = true,
 	.base = &vbases[ALIAS0_GLB_BASE],
 	.c = {
 		.dbg_name = "a53_hf_mux_v2",
@@ -674,12 +653,10 @@ static struct mux_clk a57_lf_mux_v2 = {
 		{ &a57_pll0_main.c,   2 },
 		{ &sys_apcsaux_clk.c, 3 },
 	),
-	.low_power_sel = 3,
+	.safe_parent = &sys_apcsaux_clk.c,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
 	.shift = 1,
-	.try_new_parent = true,
-	.try_get_rate = true,
 	.base = &vbases[ALIAS1_GLB_BASE],
 	.c = {
 		.dbg_name = "a57_lf_mux_v2",
@@ -715,12 +692,11 @@ static struct mux_clk a57_hf_mux_v2 = {
 		{ &a57_pll1.c,       1 },
 		{ &a57_pll0.c,       3 },
 	),
-	.low_power_sel = 0,
+	.safe_parent = &a57_lf_mux_div.c,
+	.safe_freq = 300000000,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
 	.shift = 3,
-	.try_new_parent = true,
-	.try_get_rate = true,
 	.base = &vbases[ALIAS1_GLB_BASE],
 	.c = {
 		.dbg_name = "a57_hf_mux_v2",
@@ -731,10 +707,7 @@ static struct mux_clk a57_hf_mux_v2 = {
 
 struct cpu_clk_8994 {
 	u32 cpu_reg_mask;
-	cpumask_t cpumask;
-	bool hw_low_power_ctrl;
 	struct clk c;
-	struct pm_qos_request req;
 };
 
 static inline struct cpu_clk_8994 *to_cpu_clk_8994(struct clk *c)
@@ -751,53 +724,12 @@ static enum handoff cpu_clk_8994_handoff(struct clk *c)
 
 static long cpu_clk_8994_round_rate(struct clk *c, unsigned long rate)
 {
-	unsigned long fmax = c->fmax[c->num_fmax - 1];
-	unsigned long fmin = c->fmax[1];
-	int i = 1;
-
-	if (rate <= fmin)
-		return fmin;
-	if (rate >= fmax)
-		return fmax;
-	while ((c->fmax[i++] < rate) && (i < c->num_fmax))
-		;
-
-	return c->fmax[i-1];
+	return clk_round_rate(c->parent, rate);
 }
-
-static void do_nothing(void *unused) { }
-
-#define CPU_LATENCY_NO_L2_PC_US (800 - 1)
 
 static int cpu_clk_8994_set_rate(struct clk *c, unsigned long rate)
 {
-	int ret;
-	struct cpu_clk_8994 *cpuclk = to_cpu_clk_8994(c);
-	bool hw_low_power_ctrl = cpuclk->hw_low_power_ctrl;
-
-	/*
-	 * If hardware control of the clock tree is enabled during power
-	 * collapse, setup a PM QOS request to prevent power collapse and
-	 * wake up one of the CPUs in this clock domain, to ensure software
-	 * control while the clock rate is being switched.
-	 */
-	if (hw_low_power_ctrl) {
-		memset(&cpuclk->req, 0, sizeof(cpuclk->req));
-		cpuclk->req.cpus_affine = cpuclk->cpumask;
-		cpuclk->req.type = PM_QOS_REQ_AFFINE_CORES;
-		pm_qos_add_request(&cpuclk->req, PM_QOS_CPU_DMA_LATENCY,
-				   CPU_LATENCY_NO_L2_PC_US);
-
-		ret = smp_call_function_any(&cpuclk->cpumask, do_nothing,
-						NULL, 1);
-	}
-
-	ret = clk_set_rate(c->parent, rate);
-
-	if (hw_low_power_ctrl)
-		pm_qos_remove_request(&cpuclk->req);
-
-	return ret;
+	return clk_set_rate(c->parent, rate);
 }
 
 static struct clk_ops clk_ops_cpu_8994 = {
@@ -963,7 +895,6 @@ static struct mux_clk cci_lf_mux = {
 	),
 	.en_mask = 1,
 	.safe_parent = &sys_apcsaux_clk.c,
-	.low_power_sel = 1,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
 	.shift = 1,
@@ -986,7 +917,6 @@ static struct mux_clk cci_hf_mux = {
 	),
 	.en_mask = 1,
 	.safe_parent = &cci_lf_mux.c,
-	.low_power_sel = 1,
 	.safe_freq = 600000000,
 	.ops = &cpu_mux_ops,
 	.mask = 0x3,
@@ -1055,7 +985,6 @@ static struct clk_lookup cpu_clocks_8994[] = {
 	CLK_LIST(cpu_debug_mux),
 };
 
-/* List of clocks applicable to both 8994v2 and 8992 */
 
 static struct clk_lookup cpu_clocks_8994_v2[] = {
 	CLK_LIST(a53_clk),
@@ -1216,9 +1145,6 @@ static int cpu_clock_8994_resources_init(struct platform_device *pdev)
 		return PTR_ERR(c);
 	}
 	sys_apcsaux_clk.c.parent = c;
-
-	vdd_a53.use_max_uV = true;
-	vdd_cci.use_max_uV = true;
 
 	return 0;
 }
@@ -1423,353 +1349,14 @@ static void populate_opp_table(struct platform_device *pdev)
 	}
 
 	/* One time print during bootup */
-	pr_info("clock-cpu-8994: OPP tables populated (cpu %d and %d)\n",
+	pr_info("clock-cpu-8994: OPP tables populated (cpu %d and %d)",
 		a53_cpu, a57_cpu);
 
 	print_opp_table(a53_cpu, a57_cpu);
 }
 
-static void init_v2_data(void)
-{
-	a53_pll1.vals.post_div_masked = 0x100;
-	a57_pll1.vals.post_div_masked = 0x100;
-	a53_pll0.vals.config_ctl_val = 0x004D6968;
-	a53_pll1.vals.config_ctl_val = 0x004D6968;
-	a57_pll0.vals.config_ctl_val = 0x004D6968;
-	a57_pll1.vals.config_ctl_val = 0x004D6968;
-	a53_pll0.vals.test_ctl_hi_val = 0x1;
-	a53_pll1.vals.test_ctl_hi_val = 0x1;
-	a57_pll0.vals.test_ctl_hi_val = 0x1;
-	a57_pll1.vals.test_ctl_hi_val = 0x1;
-	a53_pll0.vals.test_ctl_lo_val = 0x80000000;
-	a53_pll1.vals.test_ctl_lo_val = 0x80000000;
-	a57_pll0.vals.test_ctl_lo_val = 0x80000000;
-	a57_pll1.vals.test_ctl_lo_val = 0x80000000;
-	a53_pll0.init_test_ctl = true;
-	a53_pll1.init_test_ctl = true;
-	a57_pll0.init_test_ctl = true;
-	a57_pll1.init_test_ctl = true;
-	a53_pll0.pgm_test_ctl_enable = false;
-	a53_pll1.pgm_test_ctl_enable = false;
-	a57_pll0.pgm_test_ctl_enable = false;
-	a57_pll1.pgm_test_ctl_enable = false;
-	a57_clk.c.parent = &a57_hf_mux_v2.c;
-	a53_clk.c.parent = &a53_hf_mux_v2.c;
-	a53_div_clk.data.min_div = 8;
-	a53_div_clk.data.max_div = 8;
-	a53_div_clk.data.div = 8;
-	a57_div_clk.data.min_div = 8;
-	a57_div_clk.data.max_div = 8;
-	a57_div_clk.data.div = 8;
-	a57_pll0.no_prepared_reconfig = true;
-	a57_pll1.no_prepared_reconfig = true;
-	a53_pll0.no_prepared_reconfig = true;
-	a53_pll1.no_prepared_reconfig = true;
-}
-
 static int a57speedbin;
 struct platform_device *cpu_clock_8994_dev;
-
-/* Low power mux code begins here */
-#define EVENT_WAIT_US 1
-#define WAIT_IPI_HANDLER_BEGIN_US 50
-#define LOW_POWER_IPI_WAIT_US 100
-#define WARN_ON_SLOW_SYNC_EVENT_ITERS 500000
-
-/*
- * Low power mux switch feature flag. Cannot be switched at runtime.
- * Set this on the kernel commandline.
- */
-static int clk_low_power_mux_switch = 1;
-module_param(clk_low_power_mux_switch, int, 0444);
-
-enum {
-	CSD_LF_MUX,
-	CSD_HF_MUX,
-	CSD_N,
-};
-
-struct clkcpu_8994_idle_data {
-	struct call_single_data csd[CSD_N];
-	spinlock_t idle_lock;
-	spinlock_t *exit_idle_lock;
-	bool idle;
-	bool low_power_mux_switch;
-
-	/* Debug */
-	u64 ipi_sent_time;
-	u64 ipi_notsent_time;
-	u64 ipi_started_time;
-	u64 ipi_exit_time;
-	u64 idle_start_time;
-	u64 idle_exit_time;
-};
-
-static DEFINE_SPINLOCK(a57_exit_idle_lock);
-
-struct mux_priv_data {
-	cpumask_t cpumask;
-	spinlock_t *exit_idle_lock;
-	int csd_idx;
-};
-
-static struct mux_priv_data a57_hf_mux_priv_data = {
-	.exit_idle_lock = &a57_exit_idle_lock,
-	.csd_idx = CSD_HF_MUX,
-};
-static struct mux_priv_data a57_lf_mux_priv_data = {
-	.exit_idle_lock = &a57_exit_idle_lock,
-	.csd_idx = CSD_LF_MUX,
-};
-static DEFINE_PER_CPU(struct clkcpu_8994_idle_data, idle_data_clk_8994);
-
-static void do_low_power_poll(void *unused)
-{
-	int cpu = smp_processor_id();
-	struct clkcpu_8994_idle_data *idle_data;
-
-	idle_data = &per_cpu(idle_data_clk_8994, cpu);
-	idle_data->ipi_started_time = sched_clock();
-	udelay(LOW_POWER_IPI_WAIT_US);
-}
-
-static inline void __init_idle_data(struct clkcpu_8994_idle_data *id)
-{
-	id->ipi_sent_time = 0ULL;
-	id->ipi_notsent_time = 0ULL;
-	id->ipi_started_time = 0ULL;
-	id->ipi_exit_time = 0ULL;
-	/*
-	 * This is in case we use the fact that these flags are cleared here
-	 * as a serialization mechanism in the idle notifiers. Better to put
-	 * in this memory barrier now rather than forget about it then.
-	 */
-	mb();
-}
-
-static void __low_power_pre_mux_switch(struct mux_clk *mux)
-{
-	struct clkcpu_8994_idle_data *idle_data, *this_idle_data;
-	int cpu, this_cpu = smp_processor_id();
-	struct mux_priv_data *data = (struct mux_priv_data *)mux->priv;
-
-	/*
-	 * If we somehow ended up here in the idle thread (when the low power
-	 * mode code calls clk_enable/disable), do not attempt to schedule
-	 * IPIs since those may deadlock with IPIs sent by other entities in
-	 * the cpufreq thread.
-	 */
-	this_idle_data = &per_cpu(idle_data_clk_8994, this_cpu);
-	if (this_idle_data->idle &&
-	    cpumask_test_cpu(this_cpu, &data->cpumask))
-			return;
-
-	/*
-	 * Prevent non-idle CPUs from entering low power modes. This is to
-	 * a) Ensure that we don't hit the clk_enable/disable on other CPUs
-	 *    in the low power code, the IPI would only be processed after the
-	 *    mux switch and a sleep and wakeup cycle since we're already
-	 *    holding the mux reg lock at this point.
-	 * b) Prevent CPUs from sleeping just to have them wake up immediately
-	      and process the IPI.
-	 */
-	for_each_cpu(cpu, &data->cpumask)
-		per_cpu_idle_poll_ctrl(cpu, true);
-	spin_lock(data->exit_idle_lock);
-
-	for_each_online_cpu(cpu) {
-		if (cpu == smp_processor_id() ||
-			!cpumask_test_cpu(cpu, &data->cpumask))
-			continue;
-		idle_data = &per_cpu(idle_data_clk_8994, cpu);
-		if (!idle_data->idle) {
-			__init_idle_data(idle_data);
-			idle_data->ipi_sent_time = sched_clock();
-			/*
-			 * send IPI to core not in idle. It is assumed that the
-			 * caller (probably cpufreq) has ensured that hotplug
-			 * is not possible here.
-			 */
-			__smp_call_function_single(cpu,
-				&idle_data->csd[data->csd_idx], 0);
-		} else {
-			idle_data->ipi_notsent_time = sched_clock();
-		}
-	}
-
-	/* Wait for IPI to begin */
-	udelay(WAIT_IPI_HANDLER_BEGIN_US);
-}
-
-static void __low_power_post_mux_switch(struct mux_clk *mux)
-{
-	struct clkcpu_8994_idle_data *this_idle_data;
-	int cpu, this_cpu = smp_processor_id();
-	struct mux_priv_data *data = (struct mux_priv_data *)mux->priv;
-
-	/*
-	 * If we ended up here in the idle thread (when the low power
-	 * mode code calls clk_enable/disable), do not attempt to schedule
-	 * IPIs since those may deadlock with IPIs sent by other entities in
-	 * the cpufreq thread.
-	 */
-	this_idle_data = &per_cpu(idle_data_clk_8994, this_cpu);
-	if (this_idle_data->idle &&
-	    cpumask_test_cpu(this_cpu, &data->cpumask))
-			return;
-
-	spin_unlock(data->exit_idle_lock);
-	for_each_cpu(cpu, &data->cpumask)
-		per_cpu_idle_poll_ctrl(cpu, false);
-}
-
-/*
- * One CPU may be switching LF CPU mux, while the other is enabling or disabling
- * the HFMUX. Serialize those operations.
- */
-static DEFINE_SPINLOCK(low_power_mux_lock);
-
-static void __low_power_mux_set_sel(struct mux_clk *mux, int sel)
-{
-	u32 regval;
-	unsigned long flags;
-
-	spin_lock(&low_power_mux_lock);
-	__low_power_pre_mux_switch(mux);
-
-	spin_lock_irqsave(&mux_reg_lock, flags);
-	regval = readl_relaxed(*mux->base + mux->offset);
-	regval &= ~(mux->mask << mux->shift);
-	regval |= (sel & mux->mask) << mux->shift;
-	writel_relaxed(regval, *mux->base + mux->offset);
-	/* Ensure switch request goes through before returning */
-	mb();
-	/* Hardware mandated delay */
-	udelay(5);
-	spin_unlock_irqrestore(&mux_reg_lock, flags);
-
-	__low_power_post_mux_switch(mux);
-	spin_unlock(&low_power_mux_lock);
-}
-
-/* It is assumed that the mux enable state is locked in this function */
-static int low_power_mux_set_sel(struct mux_clk *mux, int sel)
-{
-	mux->en_mask = sel;
-
-	/*
-	 * Don't switch the mux if it isn't enabled.
-	 * However, if this is a request to select the safe source
-	 * do it unconditionally. This is to allow the safe source
-	 * to be selected during frequency switches even if the mux
-	 * is disabled (specifically on 8994 V1, the LFMUX may be
-	 * disabled).
-	 */
-	if (!mux->c.count && sel != mux->low_power_sel)
-		return 0;
-
-	__low_power_mux_set_sel(mux, mux->en_mask);
-
-	return 0;
-}
-
-static int low_power_mux_get_sel(struct mux_clk *mux)
-{
-	u32 regval = readl_relaxed(*mux->base + mux->offset);
-	return (regval >> mux->shift) & mux->mask;
-}
-
-static int low_power_mux_enable(struct mux_clk *mux)
-{
-	__low_power_mux_set_sel(mux, mux->en_mask);
-	return 0;
-}
-
-static void low_power_mux_disable(struct mux_clk *mux)
-{
-	__low_power_mux_set_sel(mux, mux->low_power_sel);
-}
-
-static int clock_cpu_8994_idle_notifier(struct notifier_block *nb,
-					     unsigned long val,
-					     void *data)
-{
-	int cpu = smp_processor_id();
-	struct clkcpu_8994_idle_data *id = &per_cpu(idle_data_clk_8994, cpu);
-
-	if (!id->low_power_mux_switch)
-		return 0;
-
-	switch (val) {
-	case IDLE_START:
-		id->idle_start_time = sched_clock();
-		id->idle = true;
-		/*
-		 * Don't allow re-ordering of the idle flag with
-		 * rest of the idle thread.
-		 */
-		mb();
-		break;
-	case IDLE_END:
-		id->idle = false;
-		/*
-		 * Don't allow re-ordering of the idle flag with
-		 * rest of the idle thread and the exit_idle_lock
-		 * below..
-		 */
-		mb();
-		id->idle_exit_time = sched_clock();
-		spin_lock(id->exit_idle_lock);
-		spin_unlock(id->exit_idle_lock);
-		break;
-	default:
-		break;
-	}
-
-	return 0;
-}
-
-static struct notifier_block clock_cpu_8994_idle_nb = {
-	.notifier_call = clock_cpu_8994_idle_notifier,
-};
-
-static struct clk_mux_ops low_power_mux_ops = {
-	.set_mux_sel = low_power_mux_set_sel,
-	.get_mux_sel = low_power_mux_get_sel,
-	.enable = low_power_mux_enable,
-	.disable = low_power_mux_disable,
-};
-
-static void low_power_mux_init(void)
-{
-	int cpu;
-
-	if (!clk_low_power_mux_switch)
-		return;
-
-	a57_hf_mux.ops = a57_hf_mux_v2.ops = &low_power_mux_ops;
-	a57_lf_mux.ops = a57_lf_mux_v2.ops = &low_power_mux_ops;
-
-	a57_hf_mux.priv = a57_hf_mux_v2.priv = &a57_hf_mux_priv_data;
-	a57_lf_mux.priv = a57_lf_mux_v2.priv = &a57_lf_mux_priv_data;
-
-	for_each_possible_cpu(cpu) {
-		struct clkcpu_8994_idle_data *id =
-					&per_cpu(idle_data_clk_8994, cpu);
-		if (logical_cpu_to_clk(cpu) == &a57_clk.c) {
-			cpumask_set_cpu(cpu, &a57_hf_mux_priv_data.cpumask);
-			cpumask_set_cpu(cpu, &a57_lf_mux_priv_data.cpumask);
-			id->exit_idle_lock = &a57_exit_idle_lock;
-			id->csd[CSD_LF_MUX].func = do_low_power_poll;
-			id->csd[CSD_HF_MUX].func = do_low_power_poll;
-			id->idle = false;
-			spin_lock_init(&id->idle_lock);
-			id->low_power_mux_switch = true;
-		}
-	}
-
-	idle_notifier_register(&clock_cpu_8994_idle_nb);
-}
 
 static int cpu_clock_8994_driver_probe(struct platform_device *pdev)
 {
@@ -1780,17 +1367,26 @@ static int cpu_clock_8994_driver_probe(struct platform_device *pdev)
 	u32 pte_efuse;
 	char a57speedbinstr[] = "qcom,a57-speedbinXX-vXX";
 
-	v2 = msm8994_v2 | msm8992;
+	v2 = msm8994_v2;
 	cpu_clock_8994_dev = pdev;
 
 	a53_pll0_main.c.flags = CLKFLAG_NO_RATE_CACHE;
 	a57_pll0_main.c.flags = CLKFLAG_NO_RATE_CACHE;
 	a53_pll1_main.c.flags = CLKFLAG_NO_RATE_CACHE;
 	a57_pll1_main.c.flags = CLKFLAG_NO_RATE_CACHE;
-	cci_pll_main.c.flags = CLKFLAG_NO_RATE_CACHE;
 
-	if (v2)
-		init_v2_data();
+	if (v2) {
+		a53_pll1.vals.post_div_masked = 0x100;
+		a57_pll1.vals.post_div_masked = 0x100;
+		a57_clk.c.parent = &a57_hf_mux_v2.c;
+		a53_clk.c.parent = &a53_hf_mux_v2.c;
+		a53_div_clk.data.min_div = 8;
+		a53_div_clk.data.max_div = 8;
+		a53_div_clk.data.div = 8;
+		a57_div_clk.data.min_div = 8;
+		a57_div_clk.data.max_div = 8;
+		a57_div_clk.data.div = 8;
+	}
 
 	ret = cpu_clock_8994_resources_init(pdev);
 	if (ret)
@@ -1831,15 +1427,6 @@ static int cpu_clock_8994_driver_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Can't get speed bin for cci\n");
 		return ret;
 	}
-
-	for_each_possible_cpu(cpu) {
-		if (logical_cpu_to_clk(cpu) == &a53_clk.c)
-			cpumask_set_cpu(cpu, &a53_clk.cpumask);
-		if (logical_cpu_to_clk(cpu) == &a57_clk.c)
-			cpumask_set_cpu(cpu, &a57_clk.cpumask);
-	}
-
-	low_power_mux_init();
 
 	get_online_cpus();
 
@@ -1922,7 +1509,6 @@ static int cpu_clock_8994_driver_probe(struct platform_device *pdev)
 static struct of_device_id match_table[] = {
 	{ .compatible = "qcom,cpu-clock-8994" },
 	{ .compatible = "qcom,cpu-clock-8994-v2" },
-	{ .compatible = "qcom,cpu-clock-8992" },
 	{}
 };
 
@@ -1964,8 +1550,9 @@ int __init cpu_clock_8994_init_a57_v2(void)
 {
 	int ret = 0;
 
-	pr_info("%s: configuring clocks for the A57 cluster\n",
-		msm8992 ? "msm8992" : "msm8994-v2");
+	pr_info("clock-cpu-8994-v2: configuring clocks for the A57 cluster\n");
+
+	msm8994_v2 = true;
 
 	vbases[ALIAS0_GLB_BASE] = ioremap(ALIAS0_GLB_BASE_PHY, SZ_4K);
 	if (!vbases[ALIAS0_GLB_BASE]) {
@@ -1990,8 +1577,7 @@ int __init cpu_clock_8994_init_a57_v2(void)
 	mb();
 	udelay(5);
 
-	pr_cont("%s: finished configuring A57 cluster clocks.\n",
-		msm8992 ? "msm8992" : "msm8994-v2");
+	pr_cont("clock-cpu-8994-v2: finished configuring A57 cluster clocks.\n");
 
 	iounmap(vbases[ALIAS1_GLB_BASE]);
 iomap_fail:
@@ -2010,14 +1596,6 @@ int __init cpu_clock_8994_init_a57(void)
 	ofnode = of_find_compatible_node(NULL, NULL,
 					 "qcom,cpu-clock-8994-v2");
 	if (ofnode)
-		msm8994_v2 = true;
-
-	ofnode = of_find_compatible_node(NULL, NULL,
-					 "qcom,cpu-clock-8992");
-	if (ofnode)
-		msm8992 = true;
-
-	if (msm8994_v2 || msm8992)
 		return cpu_clock_8994_init_a57_v2();
 
 	ofnode = of_find_compatible_node(NULL, NULL,

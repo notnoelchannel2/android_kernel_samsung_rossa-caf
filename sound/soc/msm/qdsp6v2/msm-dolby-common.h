@@ -1,5 +1,5 @@
 
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2014, 2016 The Linux Foundation. All rights reserved.
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
  * only version 2 as published by the Free Software Foundation.
@@ -232,6 +232,7 @@
 
 #define TOTAL_LENGTH_DOLBY_PARAM		745
 #define DOLBY_VIS_PARAM_HEADER_SIZE		25
+#define DOLBY_PARAM_VCNB_MAX_LENGTH		40
 
 #define DOLBY_INVALID_PORT_ID			-1
 
@@ -256,9 +257,9 @@ enum {
 	REMOTE_SUBMIX			= 0x8000,
 	ANC_HEADSET			= 0x10000,
 	ANC_HEADPHONE			= 0x20000,
-	PROXY				= 0x2000000,
-	FM				= 0x100000,
-	FM_TX				= 0x1000000,
+	PROXY				= 0x40000,
+	FM				= 0x80000,
+	FM_TX				= 0x100000,
 	DEVICE_OUT_DEFAULT		= 0x40000000,
 	DEVICE_OUT_ALL			= 0x403FFFFF,
 };

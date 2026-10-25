@@ -306,6 +306,7 @@ static struct alpha_pll_clk mmpll3 = {
 DEFINE_EXT_CLK(mmpll3_out_main, &mmpll3.c);
 
 static struct clk_freq_tbl ftbl_axi_clk_src[] = {
+	F_MM(  75000000,     mmsscc_gpll0,    8,    0,     0),
 	F_MM( 150000000,     mmsscc_gpll0,    4,    0,     0),
 	F_MM( 300000000,     mmsscc_gpll0,    2,    0,     0),
 	F_MM( 363000000,  mmpll1_out_main,    2,    0,     0),
@@ -313,6 +314,7 @@ static struct clk_freq_tbl ftbl_axi_clk_src[] = {
 };
 
 static struct clk_freq_tbl ftbl_axi_clk_src_v2[] = {
+	F_MM(  75000000,     mmsscc_gpll0,    8,    0,     0),
 	F_MM( 150000000,     mmsscc_gpll0,    4,    0,     0),
 	F_MM( 333430000,  mmpll1_out_main,  3.5,    0,     0),
 	F_MM( 466800000,  mmpll1_out_main,  2.5,    0,     0),
@@ -796,7 +798,6 @@ static struct rcg_clk ocmemnoc_clk_src = {
 
 static struct clk_freq_tbl ftbl_cci_clk_src[] = {
 	F_MM(  19200000,        mmsscc_xo,    1,    0,     0),
-	F_MM(  37500000,     mmsscc_gpll0,   16,    0,     0),
 	F_MM(  50000000,     mmsscc_gpll0,   12,    0,     0),
 	F_MM( 100000000,     mmsscc_gpll0,    6,    0,     0),
 	F_END
@@ -942,7 +943,6 @@ static struct clk_freq_tbl ftbl_mclk0_clk_src[] = {
 	F_MM(   6000000,     mmsscc_gpll0,   10,    1,    10),
 	F_MM(   8000000,     mmsscc_gpll0,   15,    1,     5),
 	F_MM(   9600000,        mmsscc_xo,    2,    0,     0),
-	F_MM(  12000000,     mmsscc_gpll0,   10,    1,     5),
 	F_MM(  16000000,  mmpll0_out_main,   10,    1,     5),
 	F_MM(  19200000,        mmsscc_xo,    1,    0,     0),
 	F_MM(  24000000,     mmsscc_gpll0,    5,    1,     5),
@@ -971,7 +971,6 @@ static struct clk_freq_tbl ftbl_mclk1_clk_src[] = {
 	F_MM(   6000000,     mmsscc_gpll0,   10,    1,    10),
 	F_MM(   8000000,     mmsscc_gpll0,   15,    1,     5),
 	F_MM(   9600000,        mmsscc_xo,    2,    0,     0),
-	F_MM(  12000000,     mmsscc_gpll0,   10,    1,     5),
 	F_MM(  16000000,  mmpll0_out_main,   10,    1,     5),
 	F_MM(  19200000,        mmsscc_xo,    1,    0,     0),
 	F_MM(  24000000,     mmsscc_gpll0,    5,    1,     5),
@@ -1000,7 +999,6 @@ static struct clk_freq_tbl ftbl_mclk2_clk_src[] = {
 	F_MM(   6000000,     mmsscc_gpll0,   10,    1,    10),
 	F_MM(   8000000,     mmsscc_gpll0,   15,    1,     5),
 	F_MM(   9600000,        mmsscc_xo,    2,    0,     0),
-	F_MM(  12000000,     mmsscc_gpll0,   10,    1,     5),
 	F_MM(  16000000,  mmpll0_out_main,   10,    1,     5),
 	F_MM(  19200000,        mmsscc_xo,    1,    0,     0),
 	F_MM(  24000000,     mmsscc_gpll0,    5,    1,     5),
@@ -1029,7 +1027,6 @@ static struct clk_freq_tbl ftbl_mclk3_clk_src[] = {
 	F_MM(   6000000,     mmsscc_gpll0,   10,    1,    10),
 	F_MM(   8000000,     mmsscc_gpll0,   15,    1,     5),
 	F_MM(   9600000,        mmsscc_xo,    2,    0,     0),
-	F_MM(  12000000,     mmsscc_gpll0,   10,    1,     5),
 	F_MM(  16000000,  mmpll0_out_main,   10,    1,     5),
 	F_MM(  19200000,        mmsscc_xo,    1,    0,     0),
 	F_MM(  24000000,     mmsscc_gpll0,    5,    1,     5),
@@ -1806,7 +1803,6 @@ static struct branch_clk camss_top_ahb_clk = {
 static struct branch_clk camss_vfe_vfe0_clk = {
 	.cbcr_reg = CAMSS_VFE_VFE0_CBCR,
 	.has_sibling = 0,
-	.toggle_memory = true,
 	.base = &virt_base,
 	.c = {
 		.dbg_name = "camss_vfe_vfe0_clk",
@@ -1819,7 +1815,6 @@ static struct branch_clk camss_vfe_vfe0_clk = {
 static struct branch_clk camss_vfe_vfe1_clk = {
 	.cbcr_reg = CAMSS_VFE_VFE1_CBCR,
 	.has_sibling = 0,
-	.toggle_memory = true,
 	.base = &virt_base,
 	.c = {
 		.dbg_name = "camss_vfe_vfe1_clk",

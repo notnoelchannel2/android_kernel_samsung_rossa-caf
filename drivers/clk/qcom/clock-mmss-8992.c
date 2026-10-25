@@ -296,6 +296,7 @@ static struct alpha_pll_clk mmpll3 = {
 DEFINE_EXT_CLK(mmpll3_out_main, &mmpll3.c);
 
 static struct clk_freq_tbl ftbl_axi_clk_src[] = {
+	F_MM(  75000000,     mmsscc_gpll0,    8,    0,     0),
 	F_MM( 150000000,     mmsscc_gpll0,    4,    0,     0),
 	F_MM( 300000000,     mmsscc_gpll0,    2,    0,     0),
 	F_MM( 404000000,  mmpll1_out_main,    2,    0,     0),
@@ -1465,7 +1466,7 @@ static struct branch_clk camss_jpeg_dma_clk = {
 
 static struct branch_clk camss_jpeg_jpeg0_clk = {
 	.cbcr_reg = CAMSS_JPEG_JPEG0_CBCR,
-	.has_sibling = 0,
+	.has_sibling = 1,
 	.base = &virt_base,
 	.c = {
 		.dbg_name = "camss_jpeg_jpeg0_clk",

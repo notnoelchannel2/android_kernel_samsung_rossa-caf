@@ -431,8 +431,6 @@ enum adreno_regs {
 	ADRENO_REG_RBBM_PERFCTR_LOAD_VALUE_HI,
 	ADRENO_REG_RBBM_SECVID_TRUST_CONTROL,
 	ADRENO_REG_RBBM_ALWAYSON_COUNTER_LO,
-	ADRENO_REG_VBIF_XIN_HALT_CTRL0,
-	ADRENO_REG_VBIF_XIN_HALT_CTRL1,
 	ADRENO_REG_REGISTER_MAX,
 };
 
@@ -596,11 +594,9 @@ struct adreno_gpudev {
 
 	struct adreno_irq *irq;
 	int num_prio_levels;
-	unsigned int vbif_xin_halt_ctrl0_mask;
 	/* GPU specific function hooks */
 	void (*irq_trace)(struct adreno_device *, unsigned int status);
 	void (*snapshot)(struct adreno_device *, struct kgsl_snapshot *);
-	void (*gpudev_init)(struct adreno_device *);
 	int (*rb_init)(struct adreno_device *, struct adreno_ringbuffer *);
 	int (*perfcounter_init)(struct adreno_device *);
 	void (*start)(struct adreno_device *);
@@ -615,8 +611,6 @@ struct adreno_gpudev {
 	void (*enable_ppd)(struct adreno_device *);
 	void (*regulator_enable)(struct adreno_device *);
 	void (*regulator_disable)(struct adreno_device *);
-	void (*pwrlevel_change_settings)(struct adreno_device *,
-					bool mask_throttle);
 };
 
 struct log_field {
@@ -694,9 +688,6 @@ extern const unsigned int a4xx_registers_count;
 
 extern const unsigned int a4xx_sp_tp_registers[];
 extern const unsigned int a4xx_sp_tp_registers_count;
-
-extern const unsigned int a4xx_ppd_registers[];
-extern const unsigned int a4xx_ppd_registers_count;
 
 extern const unsigned int a4xx_xpu_registers[];
 extern const unsigned int a4xx_xpu_reg_cnt;

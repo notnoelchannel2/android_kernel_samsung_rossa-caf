@@ -40,7 +40,6 @@ enum {
 enum {
 	MDSS_PLL_TARGET_8974,
 	MDSS_PLL_TARGET_8994,
-	MDSS_PLL_TARGET_8992,
 	MDSS_PLL_TARGET_8916,
 	MDSS_PLL_TARGET_8939,
 	MDSS_PLL_TARGET_8909,
@@ -60,11 +59,6 @@ struct mdss_pll_resources {
 	void __iomem	*phy_base;
 	void __iomem	*gdsc_base;
 	void __iomem	*dyn_pll_base;
-
-	bool	is_init_locked;
-	s64	vco_current_rate;
-	s64	vco_locking_rate;
-	s64	vco_ref_clk_rate;
 
 	/*
 	 * Certain pll's needs to update the same vco rate after resume in
@@ -110,7 +104,7 @@ struct mdss_pll_resources {
 	/*
 	 * caching the pll trim codes in the case of dynamic refresh
 	 */
-	int		cache_pll_trim_codes[2];
+	int		cache_pll_trim_codes[5];
 
 	/*
 	 * for maintaining the status of saving trim codes

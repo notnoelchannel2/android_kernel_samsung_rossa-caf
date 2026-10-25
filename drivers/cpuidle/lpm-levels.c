@@ -33,7 +33,6 @@
 #include <linux/coresight-cti.h>
 #include <linux/moduleparam.h>
 #include <linux/sched.h>
-#include <linux/cpu_pm.h>
 #include <soc/qcom/spm.h>
 #include <soc/qcom/pm.h>
 #include <soc/qcom/rpm-notifier.h>
@@ -43,7 +42,15 @@
 #include <asm/arch_timer.h>
 #include <asm/cacheflush.h>
 #include "lpm-levels.h"
+#include <linux/regulator/consumer.h>
+#include <linux/pinctrl/sec-pinmux.h>
+#include <linux/qpnp/pin.h>
+#ifdef CONFIG_SEC_GPIO_DVS
+#include <linux/secgpio_dvs.h>
+#endif
+#ifdef CONFIG_CX_VOTE_TURBO
 #include "lpm-workarounds.h"
+#endif
 #include <trace/events/power.h>
 #define CREATE_TRACE_POINTS
 #include <trace/events/trace_msm_low_power.h>
@@ -102,6 +109,12 @@ module_param_named(
 static int msm_pm_sleep_time_override;
 module_param_named(sleep_time_override,
 	msm_pm_sleep_time_override, int, S_IRUGO | S_IWUSR | S_IWGRP);
+
+#ifdef CONFIG_SEC_PM_DEBUG
+static int msm_pm_sleep_sec_debug;
+module_param_named(secdebug,
+	msm_pm_sleep_sec_debug, int, S_IRUGO | S_IWUSR | S_IWGRP);
+#endif
 
 static bool print_parsed_dt;
 module_param_named(
@@ -206,7 +219,6 @@ int set_l2_mode(struct low_power_ops *ops, int mode, bool notify_rpm)
 		ops->tz_flag = MSM_SCM_L2_GDHS;
 		coresight_cti_ctx_save();
 		break;
-	case MSM_SPM_MODE_CLOCK_GATING:
 	case MSM_SPM_MODE_RETENTION:
 	case MSM_SPM_MODE_DISABLED:
 		ops->tz_flag = MSM_SCM_L2_ON;
@@ -216,7 +228,7 @@ int set_l2_mode(struct low_power_ops *ops, int mode, bool notify_rpm)
 		lpm = MSM_SPM_MODE_DISABLED;
 		break;
 	}
-	rc = msm_spm_config_low_power_mode(ops->spm, lpm, notify_rpm);
+	rc = msm_spm_config_low_power_mode(ops->spm, lpm, true);
 
 	if (rc)
 		pr_err("%s: Failed to set L2 low power mode %d, ERR %d",
@@ -227,8 +239,6 @@ int set_l2_mode(struct low_power_ops *ops, int mode, bool notify_rpm)
 
 int set_cci_mode(struct low_power_ops *ops, int mode, bool notify_rpm)
 {
-	if (mode == MSM_SPM_MODE_CLOCK_GATING)
-		mode = MSM_SPM_MODE_DISABLED;
 	return msm_spm_config_low_power_mode(ops->spm, mode, notify_rpm);
 }
 
@@ -255,7 +265,13 @@ static int cpu_power_select(struct cpuidle_device *dev,
 	if (sleep_disabled)
 		return 0;
 
-	next_event_us = (uint32_t)(ktime_to_us(get_next_event_time(dev->cpu)));
+	/*
+	 * TODO:
+	 * Assumes event happens always on Core0. Need to check for validity
+	 * of this scenario on cluster low power modes
+	 */
+	if (!dev->cpu)
+		next_event_us = (uint32_t)(ktime_to_us(get_next_event_time()));
 
 	for (i = 0; i < cpu->nlevels; i++) {
 		struct lpm_cpu_level *level = &cpu->levels[i];
@@ -316,7 +332,7 @@ static int cpu_power_select(struct cpuidle_device *dev,
 		}
 	}
 
-	if (modified_time_us)
+	if (modified_time_us && !dev->cpu)
 		msm_pm_set_timer(modified_time_us);
 
 	return best_level;
@@ -466,16 +482,8 @@ static int cluster_configure(struct lpm_cluster *cluster, int idx,
 		ret = cluster->lpm_dev[i].set_mode(&cluster->lpm_dev[i],
 				level->mode[i],
 				level->notify_rpm);
-
 		if (ret)
 			goto failed_set_mode;
-
-		/*
-		 * Notify that the cluster is entering a low power mode
-		 */
-		if (level->mode[i] == MSM_SPM_MODE_POWER_COLLAPSE) {
-			cpu_cluster_pm_enter();
-		}
 	}
 	if (level->notify_rpm) {
 		struct cpumask nextcpu;
@@ -594,13 +602,14 @@ static void cluster_unprepare(struct lpm_cluster *cluster,
 	level = &cluster->levels[cluster->last_level];
 	if (level->notify_rpm) {
 		msm_rpm_exit_sleep();
-
+#ifdef CONFIG_CX_VOTE_TURBO
 		/* If RPM bumps up CX to turbo, unvote CX turbo vote
 		 * during exit of rpm assisted power collapse to
 		 * reduce the power impact
 		 */
 
 		lpm_wa_cx_unvote_send();
+#endif
 		msm_mpm_exit_sleep(from_idle);
 	}
 
@@ -619,13 +628,7 @@ static void cluster_unprepare(struct lpm_cluster *cluster,
 		ret = cluster->lpm_dev[i].set_mode(&cluster->lpm_dev[i],
 				level->mode[i],
 				level->notify_rpm);
-
 		BUG_ON(ret);
-
-		if (cluster->levels[last_level].mode[i] ==
-				MSM_SPM_MODE_POWER_COLLAPSE) {
-			cpu_cluster_pm_exit();
-		}
 	}
 unlock_return:
 	spin_unlock(&cluster->sync_lock);
@@ -652,11 +655,6 @@ static inline void cpu_prepare(struct lpm_cluster *cluster, int cpu_index,
 	if (from_idle && (cpu_level->use_bc_timer ||
 			(cpu_index >= cluster->min_child_level)))
 		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_ENTER, &cpu);
-
-	if (from_idle && ((cpu_level->mode == MSM_PM_SLEEP_MODE_POWER_COLLAPSE)
-		|| (cpu_level->mode ==
-			MSM_PM_SLEEP_MODE_POWER_COLLAPSE_STANDALONE)))
-		cpu_pm_enter();
 }
 
 static inline void cpu_unprepare(struct lpm_cluster *cluster, int cpu_index,
@@ -668,11 +666,6 @@ static inline void cpu_unprepare(struct lpm_cluster *cluster, int cpu_index,
 	if (from_idle && (cpu_level->use_bc_timer ||
 			(cpu_index >= cluster->min_child_level)))
 		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_EXIT, &cpu);
-
-	if (from_idle && ((cpu_level->mode == MSM_PM_SLEEP_MODE_POWER_COLLAPSE)
-		|| (cpu_level->mode ==
-			MSM_PM_SLEEP_MODE_POWER_COLLAPSE_STANDALONE)))
-		cpu_pm_exit();
 }
 
 static int lpm_cpuidle_enter(struct cpuidle_device *dev,
@@ -886,6 +879,34 @@ static int lpm_suspend_prepare(void)
 	suspend_in_progress = true;
 	msm_mpm_suspend_prepare();
 	lpm_stats_suspend_enter();
+
+#ifdef CONFIG_SEC_GPIO_DVS
+	/************************ Caution !!! ****************************
+	 * This functiongit a must be located in appropriate SLEEP position
+	 * in accordance with the specification of each BB vendor.
+	 ************************ Caution !!! ****************************/
+	gpio_dvs_check_sleepgpio();
+#ifdef SECGPIO_SLEEP_DEBUGGING
+	/************************ Caution !!! ****************************/
+	/* This func. must be located in an appropriate position for GPIO SLEEP debugging
+	 * in accordance with the specification of each BB vendor, and
+	 * the func. must be called after calling the function "gpio_dvs_check_sleepgpio"
+	 */
+	/************************ Caution !!! ****************************/
+	gpio_dvs_set_sleepgpio();
+#endif
+#endif
+
+#ifdef CONFIG_SEC_PM
+	regulator_showall_enabled();
+#endif
+
+#ifdef CONFIG_SEC_PM_DEBUG
+	if (msm_pm_sleep_sec_debug) {
+		msm_gpio_print_enabled();
+		qpnp_debug_suspend_show();
+	}
+#endif
 
 	return 0;
 }
@@ -1130,4 +1151,5 @@ void lpm_cpu_hotplug_enter(unsigned int cpu)
 
 	msm_cpu_pm_enter_sleep(mode, false);
 }
+
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
 * This program is free software; you can redistribute it and/or modify
 * it under the terms of the GNU General Public License version 2 and
 * only version 2 as published by the Free Software Foundation.
@@ -44,7 +44,7 @@ enum {
 /* DOLBY device definitions end */
 enum {
 	DOLBY_OFF_CACHE = 0,
-	DOLBY_SPEAKER_CACHE,
+	DOLBY_SPEKAER_CACHE,
 	DOLBY_HEADPHONE_CACHE,
 	DOLBY_HDMI_CACHE,
 	DOLBY_WFD_CACHE,
@@ -157,11 +157,11 @@ struct audio_rx_cal_data {
 static struct ds2_dap_params_s ds2_dap_params[DOLBY_MAX_CACHE];
 
 struct ds2_device_mapping {
-	int32_t device_id; /* audio_out_... */
-	int port_id; /* afe port. constant for a target variant. routing-v2*/
+	int32_t device_id;
+	int port_id;
 	/*Only one Dolby COPP  for a specific port*/
-	int copp_idx; /* idx for the copp port on which ds2 is active */
-	int cache_dev; /* idx to a shared parameter array dependent on device*/
+	int copp_idx;
+	int cache_dev;
 	uint32_t stream_ref_count;
 	bool active;
 	void *cal_data;
@@ -739,7 +739,7 @@ static int msm_ds2_dap_map_device_to_dolby_cache_devices(int32_t device_id)
 		break;
 	case EARPIECE:
 	case SPEAKER:
-		cache_dev = DOLBY_SPEAKER_CACHE;
+		cache_dev = DOLBY_SPEKAER_CACHE;
 		break;
 	case WIRED_HEADSET:
 	case WIRED_HEADPHONE:
@@ -1103,7 +1103,7 @@ static int msm_ds2_dap_send_end_point(int dev_map_idx, int endp_idx)
 	ds2_ap_params_obj = &ds2_dap_params[cache_device];
 	pr_debug("%s: cache dev %d, dev_map_idx %d\n", __func__,
 		 cache_device, dev_map_idx);
-	pr_debug("%s: endp - %p %p\n",  __func__,
+	pr_debug("%s: endp - %pK %pK\n",  __func__,
 		 &ds2_dap_params[cache_device], ds2_ap_params_obj);
 
 	params_value = kzalloc(params_length, GFP_KERNEL);
@@ -1189,7 +1189,7 @@ static int msm_ds2_dap_send_cached_params(int dev_map_idx,
 	}
 
 	ds2_ap_params_obj = &ds2_dap_params[cache_device];
-	pr_debug("%s: cached param - %p %p, cache_device %d\n", __func__,
+	pr_debug("%s: cached param - %pK %pK, cache_device %d\n", __func__,
 		 &ds2_dap_params[cache_device], ds2_ap_params_obj,
 		 cache_device);
 	params_value = kzalloc(params_length, GFP_KERNEL);
@@ -1503,6 +1503,15 @@ static int msm_ds2_dap_get_param(u32 cmd, void *arg)
 		goto end;
 	}
 
+	/* Return if invalid length */
+	if ((dolby_data->length >
+	      (DOLBY_MAX_LENGTH_INDIVIDUAL_PARAM - DOLBY_PARAM_PAYLOAD_SIZE)) ||
+	      (dolby_data->length <= 0)) {
+		pr_err("Invalid length %d", dolby_data->length);
+		rc = -EINVAL;
+		goto end;
+	}
+
 	for (i = 0; i < DS2_DEVICES_ALL; i++) {
 		if ((dev_map[i].active) &&
 			(dev_map[i].device_id & dolby_data->device_id)) {
@@ -1527,7 +1536,8 @@ static int msm_ds2_dap_get_param(u32 cmd, void *arg)
 	pr_debug("%s: port_id 0x%x, copp_idx %d, dev_map[i].device_id %x\n",
 		 __func__, port_id, copp_idx, dev_map[i].device_id);
 
-	params_value = kzalloc(params_length, GFP_KERNEL);
+	params_value = kzalloc(params_length + param_payload_len,
+				GFP_KERNEL);
 	if (!params_value) {
 		pr_err("%s: params memory alloc failed\n", __func__);
 		rc = -ENOMEM;
@@ -1551,9 +1561,9 @@ static int msm_ds2_dap_get_param(u32 cmd, void *arg)
 			rc = -EINVAL;
 			goto end;
 		} else {
-			params_length = (ds2_dap_params_length[i] +
-						DOLBY_PARAM_PAYLOAD_SIZE) *
-						sizeof(uint32_t);
+			params_length =
+			ds2_dap_params_length[i] * sizeof(uint32_t);
+
 			rc = adm_get_params(port_id, copp_idx,
 					    DOLBY_BUNDLE_MODULE_ID,
 					    ds2_dap_params_id[i],
@@ -1608,6 +1618,14 @@ static int msm_ds2_dap_param_visualizer_control_get(u32 cmd, void *arg)
 	}
 
 	length = ds2_dap_params[cache_dev].params_val[DOLBY_PARAM_VCNB_OFFSET];
+
+	if (length > DOLBY_PARAM_VCNB_MAX_LENGTH || length <= 0) {
+		ret = 0;
+		dolby_data->length = 0;
+		pr_err("%s Incorrect VCNB length", __func__);
+		return -EINVAL;
+	}
+
 	params_length = (2*length + DOLBY_VIS_PARAM_HEADER_SIZE) *
 							 sizeof(uint32_t);
 
@@ -1675,7 +1693,7 @@ int msm_ds2_dap_set_security_control(u32 cmd, void *arg)
 {
 	struct dolby_param_license *dolby_license =
 				 ((struct dolby_param_license *)arg);
-	pr_debug("%s: dmid %d license key %d\n", __func__,
+	pr_err("%s: dmid %d license key %d\n", __func__,
 		dolby_license->dmid, dolby_license->license_key);
 	core_set_dolby_manufacturer_id(dolby_license->dmid);
 	core_set_license(dolby_license->license_key, DOLBY_DS1_LICENSE_ID);
@@ -1935,8 +1953,6 @@ int msm_ds2_dap_init(int port_id, int copp_idx, int channels,
 				(dev_map[i].device_id &
 				ds2_dap_params_states.device)) {
 				idx = i;
-				/* Give priority to headset in case of
-				   combo device */
 				if (dev_map[i].device_id == SPEAKER)
 					continue;
 				else

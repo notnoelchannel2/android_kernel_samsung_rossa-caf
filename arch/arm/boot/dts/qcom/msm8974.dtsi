@@ -283,14 +283,6 @@
 	msm_vidc: qcom,vidc@fdc00000 {
 		compatible = "qcom,msm-vidc";
 		reg = <0xfdc00000 0xff000>;
-		qcom,qdss-presets = <0xfc307000 0x1000>,
-			<0xfc322000 0x1000>,
-			<0xfc319000 0x1000>,
-			<0xfc31a000 0x1000>,
-			<0xfc31b000 0x1000>,
-			<0xfc321000 0x1000>,
-			<0xfa180000 0x1000>,
-			<0xfa181000 0x1000>;
 		interrupts = <0 44 0>;
 		venus-supply = <&gdsc_venus>;
 		qcom,hfi = "venus";
@@ -1496,7 +1488,6 @@
 		compatible = "qcom,kraitbw-l2pm";
 		interrupts = <0 1 1>;
 		qcom,bytes-per-beat = <8>;
-		qcom,target-dev = <&cache>;
 	};
 
 	devfreq-cpufreq {
@@ -1599,7 +1590,6 @@
 	hsphy: hsphy@f92f8800 {
 		compatible = "qcom,usb-hsphy";
 		reg = <0xf92f8800 0x3ff>;
-		reg-names = "core";
 		qcom,hsphy-init = <0x00D191A4>;
 		vdd-supply = <&pm8841_s2_corner>;
 		vdda18-supply = <&pm8941_l6>;
@@ -2025,7 +2015,7 @@
 		gpios = <&msmgpio 36 0>, <&msmgpio 37 0>, <&msmgpio 38 0>, <&msmgpio 39 0>, <&msmgpio 40 0>;
 		qcom,has-48mhz-xo;
 		qcom,has-pronto-hw;
-		qcom,wcnss-pm = <11 21 1200 1 1 6>;
+		qcom,wcnss-pm = <11 21 1200 1 1>;
 	};
 
 	qcom,ocmem@fdd00000 {

@@ -123,11 +123,6 @@ int msm_platform_secondary_init(unsigned int cpu)
 
 	if (!(*warm_boot)) {
 		*warm_boot = 1;
-		/*
-		 * All CPU0 boots are considered warm boots (restore needed)
-		 * since CPU0 is the system boot CPU and never cold-booted
-		 * by the kernel.
-		 */
 		if (cpu)
 			return 0;
 	}

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -913,7 +913,6 @@ struct ipa_wdi_out_params {
  * @send_dl_skb: callback for sending skb on downlink direction to adapter.
  *		Client is expected to free the skb.
  * @device_ethaddr: device Ethernet address in network order.
- * @ipa_desc_size: IPA Sys Pipe Desc Size
  */
 struct odu_bridge_params {
 	const char *netdev_name;
@@ -921,7 +920,6 @@ struct odu_bridge_params {
 	ipa_notify_cb tx_dp_notify;
 	int (*send_dl_skb)(void *priv, struct sk_buff *skb);
 	u8 device_ethaddr[ETH_ALEN];
-	u32 ipa_desc_size;
 };
 
 #ifdef CONFIG_IPA

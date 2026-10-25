@@ -247,7 +247,11 @@ void adreno_ringbuffer_read_pm4_ucode(struct kgsl_device *device)
 			adreno_dev->gpucore->pm4fw_name, &ptr, &len);
 
 		if (ret)
+		{
+			if((ret == -EAGAIN) && (system_state == SYSTEM_POWER_OFF))
+				return;
 			goto err;
+		}
 
 		/* PM4 size is 3 dword aligned plus 1 dword of version */
 		if (len % ((sizeof(uint32_t) * 3)) != sizeof(uint32_t)) {
@@ -303,7 +307,11 @@ void adreno_ringbuffer_read_pfp_ucode(struct kgsl_device *device)
 		int ret = _load_firmware(device,
 			adreno_dev->gpucore->pfpfw_name, &ptr, &len);
 		if (ret)
+		{
+			if((ret == -EAGAIN) && (system_state == SYSTEM_POWER_OFF))
+				return;
 			goto err;
+		}
 
 		/* PFP size shold be dword aligned */
 		if (len % sizeof(uint32_t) != 0) {
@@ -369,9 +377,8 @@ static inline int adreno_ringbuffer_load_pfp_ucode(struct kgsl_device *device,
 static int _ringbuffer_bootstrap_ucode(struct adreno_ringbuffer *rb,
 					unsigned int load_jt)
 {
-	unsigned int *cmds, bootstrap_size, rb_size;
+	unsigned int *cmds, bootstrap_size;
 	int i = 0;
-	int ret;
 	struct kgsl_device *device = rb->device;
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	unsigned int pm4_size, pm4_idx, pm4_addr, pfp_size, pfp_idx, pfp_addr;
@@ -393,8 +400,6 @@ static int _ringbuffer_bootstrap_ucode(struct adreno_ringbuffer *rb,
 	pm4_size = (adreno_dev->pm4_fw_size - pm4_idx);
 	pfp_size = (adreno_dev->pfp_fw_size - pfp_idx);
 
-	bootstrap_size = (pm4_size + pfp_size + 5);
-
 	/*
 	 * Overwrite the first entry in the jump table with the special
 	 * bootstrap opcode
@@ -405,26 +410,19 @@ static int _ringbuffer_bootstrap_ucode(struct adreno_ringbuffer *rb,
 			0x400);
 		adreno_writereg(adreno_dev, ADRENO_REG_CP_PFP_UCODE_DATA,
 			 0x6f0009);
-
-		/*
-		 * The support packets (the RMW and INTERRUPT) that are sent
-		 * after the bootstrap packet should not be included in the size
-		 * of the bootstrap packet but we do need to reserve enough
-		 * space for those too
-		 */
-		rb_size = bootstrap_size + 6;
+		bootstrap_size = (pm4_size + pfp_size + 5 + 6);
 	} else {
 		adreno_writereg(adreno_dev, ADRENO_REG_CP_PFP_UCODE_ADDR,
 			0x200);
 		adreno_writereg(adreno_dev, ADRENO_REG_CP_PFP_UCODE_DATA,
 			 0x6f0005);
-		rb_size = bootstrap_size;
+		bootstrap_size = (pm4_size + pfp_size + 5);
 	}
 
 	/* clear ME_HALT to start micro engine */
 	adreno_writereg(adreno_dev, ADRENO_REG_CP_ME_CNTL, 0);
 
-	cmds = adreno_ringbuffer_allocspace(rb, rb_size);
+	cmds = adreno_ringbuffer_allocspace(rb, bootstrap_size);
 	if (IS_ERR(cmds))
 		return PTR_ERR(cmds);
 	if (cmds == NULL)
@@ -475,14 +473,7 @@ static int _ringbuffer_bootstrap_ucode(struct adreno_ringbuffer *rb,
 	}
 
 	/* idle device to validate bootstrap */
-	ret = adreno_spin_idle(device);
-
-	/* Clear the chicken bit for speed up on A430 cores */
-	if (adreno_is_a430(adreno_dev))
-		kgsl_regwrite(device, A4XX_CP_DEBUG,
-					A4XX_CP_DEBUG_DEFAULT & ~(1 << 14));
-
-	return ret;
+	return adreno_spin_idle(device);
 }
 
 /**
@@ -545,13 +536,18 @@ static int _ringbuffer_start_common(struct adreno_ringbuffer *rb)
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 
+	/* clear ME_HALT to start micro engine */
+	adreno_writereg(adreno_dev, ADRENO_REG_CP_ME_CNTL, 0);
+
 	/* ME init is GPU specific, so jump into the sub-function */
 	status = gpudev->rb_init(adreno_dev, rb);
 	if (status)
 		return status;
 
 	/* idle device to validate ME INIT */
-	return adreno_spin_idle(device);
+	status = adreno_spin_idle(device);
+
+	return status;
 }
 
 /**
@@ -593,9 +589,6 @@ int adreno_ringbuffer_warm_start(struct adreno_device *adreno_dev)
 			adreno_dev->gpucore->pfp_jt_addr);
 		if (status != 0)
 			return status;
-
-		/* clear ME_HALT to start micro engine */
-		adreno_writereg(adreno_dev, ADRENO_REG_CP_ME_CNTL, 0);
 	}
 
 	return _ringbuffer_start_common(rb);
@@ -654,12 +647,11 @@ int adreno_ringbuffer_cold_start(struct adreno_device *adreno_dev)
 					adreno_dev->pfp_fw_size, 0);
 		if (status != 0)
 			return status;
-
-		/* clear ME_HALT to start micro engine */
-		adreno_writereg(adreno_dev, ADRENO_REG_CP_ME_CNTL, 0);
 	}
 
-	return _ringbuffer_start_common(rb);
+	status = _ringbuffer_start_common(rb);
+
+	return status;
 }
 
 void adreno_ringbuffer_stop(struct adreno_device *adreno_dev)

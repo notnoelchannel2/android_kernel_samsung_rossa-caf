@@ -118,12 +118,6 @@ static int dwc3_otg_start_host(struct usb_otg *otg, int on)
 			return ret;
 		}
 
-		/*
-		 * WORKAROUND: currently host mode suspend isn't working well.
-		 * Disable xHCI's runtime PM for now.
-		 */
-		pm_runtime_disable(&dwc->xhci->dev);
-
 		hcd = platform_get_drvdata(dwc->xhci);
 		dwc3_otg_set_host(otg, &hcd->self);
 
@@ -364,24 +358,20 @@ static void dwc3_ext_event_notify(struct usb_otg *otg,
 		flush_delayed_work(&dotg->sm_work);
 
 	if (event == DWC3_EVENT_PHY_RESUME) {
-		if (pm_runtime_status_suspended(phy->dev) ||
-			atomic_read(&phy->dev->power.usage_count) == 0) {
-
-			dev_dbg(phy->dev, "ext PHY_RESUME event received\n");
-			/* ext_xceiver would have taken h/w out of LPM by now */
-			ret = pm_runtime_get(phy->dev);
-			dbg_event(0xFF, "PhyRes get", ret);
-			if (ret == -EACCES) {
-				/* pm_runtime_get may fail during system
-				   resume with -EACCES error */
-				pm_runtime_disable(phy->dev);
-				pm_runtime_set_active(phy->dev);
-				pm_runtime_enable(phy->dev);
-			} else if (ret < 0) {
-				dev_warn(phy->dev, "pm_runtime_get failed!\n");
-			}
-		} else {
+		if (!pm_runtime_status_suspended(phy->dev))
 			dev_warn(phy->dev, "PHY_RESUME event out of LPM!!!!\n");
+		dev_dbg(phy->dev, "ext PHY_RESUME event received\n");
+		/* ext_xceiver would have taken h/w out of LPM by now */
+		ret = pm_runtime_get(phy->dev);
+		dbg_event(0xFF, "PhyRes get", ret);
+		if (ret == -EACCES) {
+			/* pm_runtime_get may fail during system
+			   resume with -EACCES error */
+			pm_runtime_disable(phy->dev);
+			pm_runtime_set_active(phy->dev);
+			pm_runtime_enable(phy->dev);
+		} else if (ret < 0) {
+			dev_warn(phy->dev, "pm_runtime_get failed!\n");
 		}
 	} else if (event == DWC3_EVENT_XCEIV_STATE) {
 		if (pm_runtime_status_suspended(phy->dev) ||
@@ -462,9 +452,12 @@ static int dwc3_otg_set_power(struct usb_phy *phy, unsigned mA)
 	static int power_supply_type;
 	struct dwc3_otg *dotg = container_of(phy->otg, struct dwc3_otg, otg);
 
+#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
+	return 0;
+#endif
 
 	if (!dotg->psy || !dotg->charger) {
-		dev_dbg(phy->dev, "no usb power supply/charger registered\n");
+		dev_err(phy->dev, "no usb power supply/charger registered\n");
 		return 0;
 	}
 

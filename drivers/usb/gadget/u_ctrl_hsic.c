@@ -166,8 +166,7 @@ ghsic_send_cbits_tomodem(void *gptr, u8 portno, int cbits)
 	if (!test_bit(CH_OPENED, &port->bridge_sts))
 		return;
 
-	pr_debug("%s: ctrl_tomodem:%d DTR:%d  RST:%d\n", __func__, cbits,
-		cbits & ACM_CTRL_DTR  ? 1 : 0, cbits & ACM_CTRL_RTS ? 1 : 0);
+	pr_debug("%s: ctrl_tomodem:%d\n", __func__, cbits);
 
 	ctrl_bridge_set_cbits(port->brdg.ch_id, cbits);
 }
@@ -574,7 +573,7 @@ static ssize_t gctrl_read_stats(struct file *file, char __user *ubuf,
 
 		temp += scnprintf(buf + temp, DEBUG_BUF_SIZE - temp,
 				"\nName:        %s\n"
-				"#PORT:%d port: %p\n"
+				"#PORT:%d port: %pK\n"
 				"to_usbhost:    %lu\n"
 				"to_modem:      %lu\n"
 				"cpkt_drp_cnt:  %lu\n"

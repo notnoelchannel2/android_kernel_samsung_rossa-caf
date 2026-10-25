@@ -1,7 +1,7 @@
 /*
  * MDSS MDP Interface (used by framebuffer core)
  *
- * Copyright (c) 2007-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2007-2014, The Linux Foundation. All rights reserved.
  * Copyright (C) 2007 Google Incorporated
  *
  * This software is licensed under the terms of the GNU General Public
@@ -53,13 +53,12 @@
 #include "mdss_panel.h"
 #include "mdss_debug.h"
 #include "mdss_mdp_debug.h"
-#include "mdss_mdp_rotator.h"
 
+#define CREATE_TRACE_POINTS
 #include "mdss_mdp_trace.h"
 
 #define AXI_HALT_TIMEOUT_US	0x4000
 #define AUTOSUSPEND_TIMEOUT_MS	200
-#define DEFAULT_MDP_PIPE_WIDTH 2048
 
 struct mdss_data_type *mdss_res;
 
@@ -71,6 +70,7 @@ static int mdss_fb_mem_get_iommu_domain(void)
 struct msm_mdp_interface mdp5 = {
 	.init_fnc = mdss_mdp_overlay_init,
 	.fb_mem_get_iommu_domain = mdss_fb_mem_get_iommu_domain,
+	.panel_register_done = mdss_panel_register_done,
 	.fb_stride = mdss_mdp_fb_stride,
 	.check_dsi_status = mdss_check_dsi_ctrl_status,
 };
@@ -98,7 +98,7 @@ static struct mdss_panel_intf pan_types[] = {
 	{"edp", MDSS_PANEL_INTF_EDP},
 	{"hdmi", MDSS_PANEL_INTF_HDMI},
 };
-static char mdss_mdp_panel[MDSS_MAX_PANEL_LEN];
+char mdss_mdp_panel[MDSS_MAX_PANEL_LEN];
 
 struct mdss_iommu_map_type mdss_iommu_map[MDSS_IOMMU_MAX_DOMAIN] = {
 	[MDSS_IOMMU_DOMAIN_UNSECURE] = {
@@ -170,7 +170,7 @@ static int mdss_mdp_parse_dt_prefill(struct platform_device *pdev);
 static int mdss_mdp_parse_dt_misc(struct platform_device *pdev);
 static int mdss_mdp_parse_dt_ad_cfg(struct platform_device *pdev);
 static int mdss_mdp_parse_dt_bus_scale(struct platform_device *pdev);
-static int mdss_mdp_parse_dt_ppb_off(struct platform_device *pdev);
+
 /**
  * mdss_mdp_vbif_axi_halt() - Halt MDSS AXI ports
  * @mdata: pointer to the global mdss data structure.
@@ -383,7 +383,6 @@ static int mdss_mdp_bus_scale_set_quota(u64 ab_quota_rt, u64 ab_quota_nrt,
 			vect = &bw_table->usecase[new_uc_idx].vectors[i];
 			vect->ab = ab_quota[i];
 			vect->ib = ib_quota[i];
-
 			pr_debug("uc_idx=%d %s path idx=%d ab=%llu ib=%llu\n",
 				new_uc_idx, (i < rt_axi_port_cnt) ? "rt" : "nrt"
 				, i, vect->ab, vect->ib);
@@ -761,9 +760,8 @@ void mdss_bus_bandwidth_ctrl(int enable)
 
 	if (changed) {
 		if (!enable) {
-			if (!mdata->handoff_pending)
-				msm_bus_scale_client_update_request(
-						mdata->bus_hdl, 0);
+			msm_bus_scale_client_update_request(
+				mdata->bus_hdl, 0);
 			pm_runtime_mark_last_busy(&mdata->pdev->dev);
 			pm_runtime_put_autosuspend(&mdata->pdev->dev);
 		} else {
@@ -913,8 +911,6 @@ static int mdss_mdp_irq_clk_setup(struct mdss_data_type *mdata)
 	mdata->gdsc_cb.priority = 5;
 	if (regulator_register_notifier(mdata->fs, &(mdata->gdsc_cb)))
 		pr_warn("GDSC notification registration failed!\n");
-	else
-		mdata->regulator_notif_register = true;
 
 	mdata->vdd_cx = devm_regulator_get(&mdata->pdev->dev,
 				"vdd-cx");
@@ -1045,9 +1041,6 @@ int mdss_iommu_init(struct mdss_data_type *mdata)
 			return -EINVAL;
 		}
 
-		iommu_set_fault_handler(domain, mdss_xlog_tout_handler_iommu,
-			NULL);
-
 		iomap->ctx = msm_iommu_get_ctx(iomap->ctx_name);
 		if (!iomap->ctx) {
 			pr_warn("unable to get iommu ctx(%s)\n",
@@ -1069,11 +1062,9 @@ static void mdss_debug_enable_clock(int on)
 		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 }
 
-static int mdss_mdp_debug_init(struct platform_device *pdev,
-	struct mdss_data_type *mdata)
+static int mdss_mdp_debug_init(struct mdss_data_type *mdata)
 {
 	int rc;
-	struct mdss_debug_base *dbg_blk;
 
 	mdata->debug_inf.debug_enable_clock = mdss_debug_enable_clock;
 
@@ -1087,11 +1078,8 @@ static int mdss_mdp_debug_init(struct platform_device *pdev,
 		return rc;
 	}
 
-	mdss_debug_register_io("mdp", &mdata->mdss_io, &dbg_blk);
-	mdss_debug_register_dump_range(pdev, dbg_blk, "qcom,regs-dump-mdp",
-		"qcom,regs-dump-names-mdp");
-
-	mdss_debug_register_io("vbif", &mdata->vbif_io, NULL);
+	mdss_debug_register_io("mdp", &mdata->mdss_io);
+	mdss_debug_register_io("vbif", &mdata->vbif_io);
 
 	return 0;
 }
@@ -1101,17 +1089,12 @@ static void mdss_mdp_hw_rev_caps_init(struct mdss_data_type *mdata)
 	switch (mdata->mdp_rev) {
 	case MDSS_MDP_HW_REV_105:
 	case MDSS_MDP_HW_REV_109:
-		mdss_set_quirk(mdata, MDSS_QUIRK_BWCPANIC);
-		mdata->max_target_zorder = 7; /* excluding base layer */
-		mdata->max_cursor_size = 128;
-		break;
 	case MDSS_MDP_HW_REV_110:
-		mdss_set_quirk(mdata, MDSS_QUIRK_BWCPANIC);
-		mdata->max_target_zorder = 4; /* excluding base layer */
+		mdata->max_target_zorder = MDSS_MDP_MAX_STAGE;
 		mdata->max_cursor_size = 128;
 		break;
 	default:
-		mdata->max_target_zorder = 4; /* excluding base layer */
+		mdata->max_target_zorder = MDSS_MDP_STAGE_4;
 		mdata->max_cursor_size = 64;
 	}
 }
@@ -1123,6 +1106,7 @@ static void mdss_hw_rev_init(struct mdss_data_type *mdata)
 
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
 	mdata->mdp_rev = MDSS_REG_READ(mdata, MDSS_REG_HW_VERSION);
+	pr_info_once("MDP Rev=%x\n", mdata->mdp_rev);
 	mdss_mdp_hw_rev_caps_init(mdata);
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 }
@@ -1135,17 +1119,18 @@ static void mdss_hw_rev_init(struct mdss_data_type *mdata)
  * parameters. This function does not explicitly turn on the MDP clocks
  * and so it must be called with the MDP clocks already enabled.
  */
-void mdss_hw_init(struct mdss_data_type *mdata)
+int mdss_hw_init(struct mdss_data_type *mdata)
 {
 	int i, j;
 	char *offset;
 	struct mdss_mdp_pipe *vig;
 
+	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
+
 	mdss_hw_rev_init(mdata);
 
-	/* Disable hw underrun recovery only for older mdp reversions. */
-	if (mdata->mdp_rev < MDSS_MDP_HW_REV_105)
-		writel_relaxed(0x0, mdata->mdp_base +
+	/* disable hw underrun recovery */
+	writel_relaxed(0x0, mdata->mdp_base +
 			MDSS_MDP_REG_VIDEO_INTF_UNDERFLOW_CTL);
 
 	if (mdata->hw_settings) {
@@ -1183,7 +1168,11 @@ void mdss_hw_init(struct mdss_data_type *mdata)
 		for (i = 0; i < mdata->nvig_pipes; i++)
 			mdss_mdp_hscl_init(&vig[i]);
 
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
+
 	pr_debug("MDP hw init done\n");
+
+	return 0;
 }
 
 static u32 mdss_mdp_res_init(struct mdss_data_type *mdata)
@@ -1211,7 +1200,7 @@ static u32 mdss_mdp_res_init(struct mdss_data_type *mdata)
 
 	mdata->iclient = msm_ion_client_create(mdata->pdev->name);
 	if (IS_ERR_OR_NULL(mdata->iclient)) {
-		pr_err("msm_ion_client_create() return error (%p)\n",
+		pr_err("msm_ion_client_create() return error (%pK)\n",
 				mdata->iclient);
 		mdata->iclient = NULL;
 	}
@@ -1236,11 +1225,13 @@ void mdss_mdp_footswitch_ctrl_splash(int on)
 	if (mdata != NULL) {
 		if (on) {
 			pr_debug("Enable MDP FS for splash.\n");
+			mdata->handoff_pending = true;
 			ret = regulator_enable(mdata->fs);
 			if (ret)
 				pr_err("Footswitch failed to enable\n");
 
 			mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
+			mdss_hw_init(mdata);
 		} else {
 			pr_debug("Disable MDP FS for splash.\n");
 			mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
@@ -1405,8 +1396,6 @@ static ssize_t mdss_mdp_show_capabilities(struct device *dev,
 		SPRINT("max_bandwidth_low=%u\n", mdata->max_bw_low);
 	if (mdata->max_bw_high)
 		SPRINT("max_bandwidth_high=%u\n", mdata->max_bw_high);
-	if (mdata->max_pipe_width)
-		SPRINT("max_pipe_width=%d\n", mdata->max_pipe_width);
 	if (mdata->max_mixer_width)
 		SPRINT("max_mixer_width=%d\n", mdata->max_mixer_width);
 	SPRINT("features=");
@@ -1453,7 +1442,6 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 	struct resource *res;
 	int rc;
 	struct mdss_data_type *mdata;
-	bool display_on;
 
 	if (!pdev->dev.of_node) {
 		pr_err("MDP driver only supports device tree probe\n");
@@ -1476,6 +1464,17 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 	mutex_init(&mdata->reg_lock);
 	atomic_set(&mdata->sd_client_count, 0);
 	atomic_set(&mdata->active_intf_cnt, 0);
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mdp_phys");
+	if (!res) {
+		pr_err("unable to get MDP base address\n");
+		rc = -ENOMEM;
+		goto probe_done;
+	}
+
+	mdata->mdp_reg_size = resource_size(res);
+	mdata->mdss_base = devm_ioremap(&pdev->dev, res->start,
+				       mdata->mdp_reg_size);
 
 	mdss_res->mdss_util = mdss_get_util_intf();
 	if (mdss_res->mdss_util == NULL) {
@@ -1504,7 +1503,7 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 		pr_err("unable to map MDSS VBIF base\n");
 		goto probe_done;
 	}
-	pr_debug("MDSS VBIF HW Base addr=0x%x len=0x%x\n",
+	pr_err("MDSS VBIF HW Base addr=0x%x len=0x%x\n",
 		(int) (unsigned long) mdata->vbif_io.base,
 		mdata->vbif_io.len);
 
@@ -1512,7 +1511,7 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 	if (rc)
 		pr_debug("unable to map MDSS VBIF non-realtime base\n");
 	else
-		pr_debug("MDSS VBIF NRT HW Base addr=%p len=0x%x\n",
+		pr_debug("MDSS VBIF NRT HW Base addr=%pK len=0x%x\n",
 			mdata->vbif_nrt_io.base, mdata->vbif_nrt_io.len);
 
 	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
@@ -1558,13 +1557,8 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 		pr_err("unable to register bus scaling\n");
 		goto probe_done;
 	}
-	rc = mdss_mdp_rot_mgr_init();
-	if (rc) {
-		pr_err("unable to initialize rotation mgr\n");
-		goto probe_done;
-	}
 
-	rc = mdss_mdp_debug_init(pdev, mdata);
+	rc = mdss_mdp_debug_init(mdata);
 	if (rc) {
 		pr_err("unable to initialize mdp debugging\n");
 		goto probe_done;
@@ -1590,41 +1584,8 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 	if (rc)
 		pr_err("mdss_register_irq failed.\n");
 	mdss_res->mdss_util->mdp_probe_done = true;
-
-	/*
-	 * enable clocks and read mdp_rev as soon as possible once
-	 * kernel is up. Read the DISP_INTF_SEL register to check if
-	 * display was enabled in bootloader or not. If yes, let handoff
-	 * handle removing the extra clk/regulator votes else turn off
-	 * clk/regulators because purpose here is to get mdp_rev.
-	 */
-	mdss_mdp_footswitch_ctrl_splash(true);
-	mdss_hw_init(mdata);
-
-	if (mdss_has_quirk(mdata, MDSS_QUIRK_BWCPANIC)) {
-		mdata->default_panic_lut0 = readl_relaxed(mdata->mdp_base +
-			MMSS_MDP_PANIC_LUT0);
-		mdata->default_panic_lut1 = readl_relaxed(mdata->mdp_base +
-			MMSS_MDP_PANIC_LUT1);
-		mdata->default_robust_lut = readl_relaxed(mdata->mdp_base +
-			MMSS_MDP_ROBUST_LUT);
-	}
-
-	display_on = (bool)readl_relaxed(mdata->mdp_base +
-		MDSS_MDP_REG_DISP_INTF_SEL);
-	if (!display_on)
-		mdss_mdp_footswitch_ctrl_splash(false);
-	else
-		mdata->handoff_pending = true;
-
-	pr_info("mdss version = 0x%x, bootloader display is %s\n",
-		mdata->mdp_rev, display_on ? "on" : "off");
-
 probe_done:
 	if (IS_ERR_VALUE(rc)) {
-		if (mdata->regulator_notif_register)
-			regulator_unregister_notifier(mdata->fs,
-						&(mdata->gdsc_cb));
 		mdss_mdp_hw.ptr = NULL;
 		mdss_mdp_pp_term(&pdev->dev);
 		mutex_destroy(&mdata->reg_lock);
@@ -1770,10 +1731,6 @@ static int mdss_mdp_parse_dt(struct platform_device *pdev)
 		pr_err("Error in device tree : bus scale\n");
 		return rc;
 	}
-
-	rc = mdss_mdp_parse_dt_ppb_off(pdev);
-	if (rc)
-		pr_debug("Info in device tree: ppb offset not configured\n");
 
 	/* Parse the mdp specific register base offset*/
 	rc = of_property_read_u32(pdev->dev.of_node,
@@ -2637,10 +2594,6 @@ static int mdss_mdp_parse_dt_misc(struct platform_device *pdev)
 		"qcom,mdss-rotator-ot-limit", &data);
 	mdata->rotator_ot_limit = (!rc ? data : 0);
 
-	rc = of_property_read_u32(pdev->dev.of_node,
-		"qcom,mdss-default-ot-limit", &data);
-	mdata->default_ot_limit = (!rc ? data : 0);
-
 	mdata->has_non_scalar_rgb = of_property_read_bool(pdev->dev.of_node,
 		"qcom,mdss-has-non-scalar-rgb");
 	mdata->has_bwc = of_property_read_bool(pdev->dev.of_node,
@@ -2685,7 +2638,7 @@ static int mdss_mdp_parse_dt_misc(struct platform_device *pdev)
 	if (rc)
 		pr_debug("Could not read optional property: highest bank bit\n");
 
-	mdata->has_pingpong_split = of_property_read_bool(pdev->dev.of_node,
+	mdata->has_dst_split = of_property_read_bool(pdev->dev.of_node,
 		 "qcom,mdss-has-dst-split");
 
 	/*
@@ -2717,6 +2670,16 @@ static int mdss_mdp_parse_dt_misc(struct platform_device *pdev)
 	mdata->ib_factor_overlap.denom = mdata->ib_factor.denom;
 	mdss_mdp_parse_dt_fudge_factors(pdev, "qcom,mdss-ib-factor-overlap",
 		&mdata->ib_factor_overlap);
+
+	/*
+	 * 1x factor on ib_factor_cmd as default value. This value is
+	 * experimentally determined and should be tuned in device
+	 * tree
+	 */
+	mdata->ib_factor_cmd.numer = 1;
+	mdata->ib_factor_cmd.denom = 1;
+	mdss_mdp_parse_dt_fudge_factors(pdev, "qcom,mdss-ib-factor-cmd",
+		&mdata->ib_factor_cmd);
 
 	mdata->clk_factor.numer = 1;
 	mdata->clk_factor.denom = 1;
@@ -2766,12 +2729,6 @@ static int mdss_mdp_parse_dt_misc(struct platform_device *pdev)
 	if (rc)
 		pr_debug("number of channels property not specified\n");
 
-	rc = of_property_read_u32(pdev->dev.of_node,
-			"qcom,max-pipe-width", &mdata->max_pipe_width);
-	if (rc) {
-		pr_debug("max pipe width not specified. Using default value\n");
-		mdata->max_pipe_width = DEFAULT_MDP_PIPE_WIDTH;
-	}
 	return 0;
 }
 
@@ -2813,31 +2770,6 @@ static int mdss_mdp_parse_dt_ad_cfg(struct platform_device *pdev)
 parse_done:
 	kfree(ad_offsets);
 	return rc;
-}
-
-static int mdss_mdp_parse_dt_ppb_off(struct platform_device *pdev)
-{
-	struct mdss_data_type *mdata = platform_get_drvdata(pdev);
-	u32 len, index;
-	const u32 *arr;
-	arr = of_get_property(pdev->dev.of_node, "qcom,mdss-ppb-off", &len);
-	if (arr) {
-		mdata->nppb = len / sizeof(u32);
-		mdata->ppb = devm_kzalloc(&mdata->pdev->dev,
-				sizeof(struct mdss_mdp_ppb) *
-				mdata->nppb, GFP_KERNEL);
-
-		if (mdata->ppb == NULL)
-			return -ENOMEM;
-
-		for (index = 0; index <  mdata->nppb; index++) {
-			mdata->ppb[index].ctl_off = be32_to_cpu(arr[index]);
-			mdata->ppb[index].cfg_off =
-				mdata->ppb[index].ctl_off + 4;
-		}
-		return 0;
-	}
-	return -EINVAL;
 }
 
 static int mdss_mdp_parse_dt_bus_scale(struct platform_device *pdev)
@@ -2999,177 +2931,6 @@ int mdss_panel_get_boot_cfg(void)
 		rc = 0;
 	return rc;
 }
-
-int mdss_mdp_wait_for_xin_halt(u32 xin_id, bool is_vbif_nrt)
-{
-	void __iomem *vbif_base;
-	u32 status;
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-	u32 idle_mask = BIT(xin_id);
-	int rc;
-
-	vbif_base = is_vbif_nrt ? mdata->vbif_nrt_io.base :
-				mdata->vbif_io.base;
-
-	rc = readl_poll_timeout(vbif_base + MMSS_VBIF_XIN_HALT_CTRL1,
-		status, (status & idle_mask),
-		1000, XIN_HALT_TIMEOUT_US);
-	if (rc == -ETIMEDOUT) {
-		pr_err("VBIF client %d not halting. TIMEDOUT.\n",
-			xin_id);
-		MDSS_XLOG_TOUT_HANDLER("mdp", "vbif", "panic");
-	} else {
-		pr_debug("VBIF client %d is halted\n", xin_id);
-	}
-
-	return rc;
-}
-
-/**
- * force_on_xin_clk() - enable/disable the force-on for the pipe clock
- * @bit_off: offset of the bit to enable/disable the force-on.
- * @reg_off: register offset for the clock control.
- * @enable: boolean to indicate if the force-on of the clock needs to be
- * enabled or disabled.
- *
- * This function returns:
- * true - if the clock is forced-on by this function
- * false - if the clock was already forced on
- * It is the caller responsibility to check if this function is forcing
- * the clock on; if so, it will need to remove the force of the clock,
- * otherwise it should avoid to remove the force-on.
- * Clocks must be on when calling this function.
- */
-bool force_on_xin_clk(u32 bit_off, u32 clk_ctl_reg_off, bool enable)
-{
-	u32 val;
-	u32 force_on_mask;
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-	bool clk_forced_on = false;
-
-	force_on_mask = BIT(bit_off);
-	val = readl_relaxed(mdata->mdp_base + clk_ctl_reg_off);
-
-	clk_forced_on = !(force_on_mask & val);
-
-	if (true == enable)
-		val |= force_on_mask;
-	else
-		val &= ~force_on_mask;
-
-	writel_relaxed(val, mdata->mdp_base + clk_ctl_reg_off);
-
-	return clk_forced_on;
-}
-
-static bool limit_rotator_ot(bool is_yuv, u32 width, u32 height)
-{
-	return (true == is_yuv) &&
-		(width * height <= 1080 * 1920);
-}
-
-static int limit_wb_ot(u32 width, u32 height)
-{
-
-	return width * height <= 1080 * 1920;
-}
-
-static u32 get_ot_limit(u32 reg_off, u32 bit_off, bool is_rot,
-	bool is_wb, bool is_yuv, u32 width, u32 height)
-{
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-	u32 ot_lim = mdata->default_ot_limit;
-	u32 is_vbif_nrt, val;
-
-	/*
-	 * If default ot limit is not set from dt,
-	 * then ot limiting is disabled.
-	 */
-	if (ot_lim == 0)
-		goto exit;
-
-	is_vbif_nrt = mdss_mdp_is_vbif_nrt(mdata->mdp_rev);
-
-	if ((is_rot && limit_rotator_ot(is_yuv, width, height)) ||
-		(is_wb && limit_wb_ot(width, height))) {
-		ot_lim = MDSS_OT_LIMIT;
-	}
-
-	val = MDSS_VBIF_READ(mdata, reg_off, is_vbif_nrt);
-	val &= (0xFF << bit_off);
-	val = val >> bit_off;
-
-	if (val == ot_lim)
-		ot_lim = 0;
-
-exit:
-	return ot_lim;
-}
-
-void mdss_mdp_set_ot_limit(struct mdss_mdp_set_ot_params *params,
-	bool is_rot, bool is_wb, bool is_yuv)
-{
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-	u32 ot_lim;
-	u32 reg_off_vbif_lim_conf = (params->xin_id / 4) * 4 +
-		params->reg_off_vbif_lim_conf;
-	u32 bit_off_vbif_lim_conf = (params->xin_id % 4) * 8;
-	bool is_vbif_nrt = mdss_mdp_is_vbif_nrt(mdata->mdp_rev);
-	u32 reg_val;
-	bool forced_on;
-
-	if (!mdss_mdp_apply_ot_limit(mdata->mdp_rev))
-		goto exit;
-
-	ot_lim = get_ot_limit(
-		reg_off_vbif_lim_conf,
-		bit_off_vbif_lim_conf,
-		is_rot, is_wb, is_yuv,
-		params->width,
-		params->height) & 0xFF;
-
-	if (ot_lim == 0)
-		goto exit;
-
-	trace_mdp_perf_set_ot(params->num, params->xin_id, ot_lim,
-		is_vbif_nrt);
-
-	mutex_lock(&mdata->reg_lock);
-
-	forced_on = force_on_xin_clk(params->bit_off_mdp_clk_ctrl,
-		params->reg_off_mdp_clk_ctrl, true);
-
-	reg_val = MDSS_VBIF_READ(mdata, reg_off_vbif_lim_conf,
-		is_vbif_nrt);
-	reg_val &= ~(0xFF << bit_off_vbif_lim_conf);
-	reg_val |= (ot_lim) << bit_off_vbif_lim_conf;
-	MDSS_VBIF_WRITE(mdata, reg_off_vbif_lim_conf, reg_val,
-		is_vbif_nrt);
-
-	reg_val = MDSS_VBIF_READ(mdata, MMSS_VBIF_XIN_HALT_CTRL0,
-		is_vbif_nrt);
-	MDSS_VBIF_WRITE(mdata, MMSS_VBIF_XIN_HALT_CTRL0,
-		reg_val | BIT(params->xin_id), is_vbif_nrt);
-
-	mutex_unlock(&mdata->reg_lock);
-	mdss_mdp_wait_for_xin_halt(params->xin_id, is_vbif_nrt);
-	mutex_lock(&mdata->reg_lock);
-
-	reg_val = MDSS_VBIF_READ(mdata, MMSS_VBIF_XIN_HALT_CTRL0,
-		is_vbif_nrt);
-	MDSS_VBIF_WRITE(mdata, MMSS_VBIF_XIN_HALT_CTRL0,
-		reg_val & ~BIT(params->xin_id), is_vbif_nrt);
-
-	if (forced_on)
-		force_on_xin_clk(params->bit_off_mdp_clk_ctrl,
-			params->reg_off_mdp_clk_ctrl, false);
-
-	mutex_unlock(&mdata->reg_lock);
-
-exit:
-	return;
-}
-
 
 static int mdss_mdp_cx_ctrl(struct mdss_data_type *mdata, int enable)
 {
@@ -3450,8 +3211,6 @@ static int mdss_mdp_remove(struct platform_device *pdev)
 	mdss_mdp_pp_term(&pdev->dev);
 	mdss_mdp_bus_scale_unregister(mdata);
 	mdss_debugfs_remove(mdata);
-	if (mdata->regulator_notif_register)
-		regulator_unregister_notifier(mdata->fs, &(mdata->gdsc_cb));
 	return 0;
 }
 

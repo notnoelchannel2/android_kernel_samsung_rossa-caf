@@ -456,13 +456,8 @@ static int ecm_qc_bam_connect(struct f_ecm_qc *dev)
 	struct usb_gadget *gadget = cdev->gadget;
 	enum peer_bam peer_bam = (dev->xport == USB_GADGET_XPORT_BAM2BAM_IPA) ?
 		IPA_P_BAM : A2_P_BAM;
-	int port_num;
 
-	port_num = (u_bam_data_func_to_port(USB_FUNC_ECM,
-					    ECM_QC_DEFAULT_PORT));
-	if (port_num < 0)
-		return port_num;
-	ret = bam2bam_data_port_select(port_num);
+	ret = bam2bam_data_port_select(ECM_QC_DEFAULT_PORT);
 	if (ret) {
 		pr_err("ecm_qc port select failed with err:%d\n", ret);
 		return ret;
@@ -482,9 +477,8 @@ static int ecm_qc_bam_connect(struct f_ecm_qc *dev)
 		pr_err("usb_bam_get_connection_idx failed\n");
 		return ret;
 	}
-	ret = bam_data_connect(&dev->bam_port, port_num,
-		dev->xport, src_connection_idx, dst_connection_idx,
-		USB_FUNC_ECM);
+	ret = bam_data_connect(&dev->bam_port, 0, dev->xport,
+		src_connection_idx, dst_connection_idx, USB_FUNC_ECM);
 	if (ret) {
 		pr_err("bam_data_connect failed: err:%d\n", ret);
 		return ret;
@@ -501,15 +495,9 @@ static int ecm_qc_bam_connect(struct f_ecm_qc *dev)
 
 static int ecm_qc_bam_disconnect(struct f_ecm_qc *dev)
 {
-	int port_num;
 	pr_debug("%s: dev:%p. Disconnect BAM.\n", __func__, dev);
 
-	__ecm->ecm_mdm_ready_trigger = false;
-	port_num = (u_bam_data_func_to_port(USB_FUNC_ECM,
-					    ECM_QC_DEFAULT_PORT));
-	if (port_num < 0)
-		return port_num;
-	bam_data_disconnect(&dev->bam_port, port_num);
+	bam_data_disconnect(&dev->bam_port, 0);
 
 	return 0;
 }
@@ -790,7 +778,6 @@ static void ecm_qc_suspend(struct usb_function *f)
 {
 	struct f_ecm_qc	*ecm = func_to_ecm_qc(f);
 	bool remote_wakeup_allowed;
-	int port_num;
 
 	/* Is DATA interface initialized? */
 	if (!ecm->data_interface_up) {
@@ -806,11 +793,7 @@ static void ecm_qc_suspend(struct usb_function *f)
 
 	pr_debug("%s(): remote_wakeup:%d\n:", __func__, remote_wakeup_allowed);
 	if (remote_wakeup_allowed) {
-		port_num = (u_bam_data_func_to_port(USB_FUNC_ECM,
-						    ECM_QC_ACTIVE_PORT));
-		if (port_num < 0)
-			return;
-		bam_data_suspend(port_num);
+		bam_data_suspend(ECM_QC_ACTIVE_PORT);
 	} else {
 		/*
 		 * When remote wakeup is disabled, IPA BAM is disconnected
@@ -831,7 +814,6 @@ static void ecm_qc_resume(struct usb_function *f)
 {
 	struct f_ecm_qc	*ecm = func_to_ecm_qc(f);
 	bool remote_wakeup_allowed;
-	int port_num;
 
 	if (!ecm->data_interface_up) {
 		pr_err("%s(): data interface was not up\n", __func__);
@@ -845,11 +827,7 @@ static void ecm_qc_resume(struct usb_function *f)
 			f->config->cdev->gadget->remote_wakeup;
 
 	if (remote_wakeup_allowed) {
-		port_num = (u_bam_data_func_to_port(USB_FUNC_ECM,
-						    ECM_QC_ACTIVE_PORT));
-		if (port_num < 0)
-			return;
-		bam_data_resume(port_num);
+		bam_data_resume(ECM_QC_ACTIVE_PORT);
 	} else {
 		/* Restore endpoint descriptors info. */
 		ecm->bam_port.in->desc  = ecm->in_ep_desc_backup;
@@ -903,7 +881,6 @@ static void ecm_qc_close(struct qc_gether *geth)
 void ecm_mdm_ready(void)
 {
 	struct f_ecm_qc *ecm = __ecm;
-	int port_num;
 
 	if (!ecm) {
 		pr_err("can't set ecm_ready_trigger, no ecm instance\n");
@@ -919,11 +896,7 @@ void ecm_mdm_ready(void)
 	ecm->ecm_mdm_ready_trigger = true;
 	ecm->is_open = true;
 	ecm_qc_notify(ecm);
-	port_num = (u_bam_data_func_to_port(USB_FUNC_ECM,
-					    ECM_QC_ACTIVE_PORT));
-	if (port_num < 0)
-		return;
-	bam_data_start_rx_tx(port_num);
+	bam_data_start_rx_tx(0);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -1102,17 +1075,8 @@ ecm_qc_unbind(struct usb_configuration *c, struct usb_function *f)
 
 	ecm_qc_string_defs[1].s = NULL;
 
-	if (ecm->xport == USB_GADGET_XPORT_BAM2BAM_IPA) {
-		/*
-		 * call flush_workqueue to make sure that any pending
-		 * disconnect_work() from u_bam_data.c file is being
-		 * flushed before calling this rndis_ipa_cleanup API
-		 * as rndis ipa disconnect API is required to be
-		 * called before this.
-		 */
-		bam_data_flush_workqueue();
+	if (ecm->xport == USB_GADGET_XPORT_BAM2BAM_IPA)
 		ecm_ipa_cleanup(ipa_params.private);
-	}
 
 	kfree(ecm);
 	__ecm = NULL;
@@ -1244,7 +1208,7 @@ static int ecm_qc_init(void)
 
 	pr_debug("initialize ecm qc port instance\n");
 
-	ret = bam_data_setup(USB_FUNC_ECM, ECM_QC_NO_PORTS);
+	ret = bam_data_setup(ECM_QC_NO_PORTS);
 	if (ret) {
 		pr_err("bam_data_setup failed err: %d\n", ret);
 		return ret;

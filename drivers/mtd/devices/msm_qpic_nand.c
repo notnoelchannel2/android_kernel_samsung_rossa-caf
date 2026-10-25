@@ -95,7 +95,6 @@ static dma_addr_t msm_nand_dma_map(struct device *dev, void *addr, size_t size,
 	return dma_map_page(dev, page, offset, size, dir);
 }
 
-#ifdef CONFIG_MSM_BUS_SCALING
 static int msm_nand_bus_set_vote(struct msm_nand_info *info,
 			unsigned int vote)
 {
@@ -141,13 +140,6 @@ static int msm_nand_setup_clocks_and_bus_bw(struct msm_nand_info *info,
 out:
 	return ret;
 }
-#else
-static int msm_nand_setup_clocks_and_bus_bw(struct msm_nand_info *info,
-				bool vote)
-{
-	return 0;
-}
-#endif
 
 #ifdef CONFIG_PM_RUNTIME
 static int msm_nand_runtime_suspend(struct device *dev)
@@ -228,7 +220,6 @@ static int msm_nand_resume(struct device *dev)
 }
 #endif
 
-#ifdef CONFIG_PM_RUNTIME
 static int msm_nand_get_device(struct device *dev)
 {
 	int ret = 0;
@@ -257,19 +248,7 @@ static int msm_nand_put_device(struct device *dev)
 	}
 	return ret;
 }
-#else
-static int msm_nand_get_device(struct device *dev)
-{
-	return 0;
-}
 
-static int msm_nand_put_device(struct device *dev)
-{
-	return 0;
-}
-#endif
-
-#ifdef CONFIG_MSM_BUS_SCALING
 static int msm_nand_bus_register(struct platform_device *pdev,
 		struct msm_nand_info *info)
 {
@@ -296,17 +275,6 @@ static void msm_nand_bus_unregister(struct msm_nand_info *info)
 	if (info->clk_data.client_handle)
 		msm_bus_scale_unregister_client(info->clk_data.client_handle);
 }
-#else
-static int msm_nand_bus_register(struct platform_device *pdev,
-		struct msm_nand_info *info)
-{
-	return 0;
-}
-
-static void msm_nand_bus_unregister(struct msm_nand_info *info)
-{
-}
-#endif
 
 /*
  * Wrapper function to prepare a single SPS command element with the data

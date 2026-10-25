@@ -128,8 +128,6 @@ struct qseecom_send_svc_cmd_req {
 enum qseecom_key_management_usage_type {
 	QSEOS_KM_USAGE_DISK_ENCRYPTION = 0x01,
 	QSEOS_KM_USAGE_FILE_ENCRYPTION = 0x02,
-	QSEOS_KM_USAGE_ICE_DISK_ENCRYPTION = 0x03,
-	QSEOS_KM_USAGE_ICE_FILE_ENCRYPTION = 0x04,
 	QSEOS_KM_USAGE_MAX
 };
 
@@ -282,15 +280,12 @@ extern long qseecom_ioctl(struct file *file,
 	_IOWR(QSEECOM_IOC_MAGIC, 24, struct qseecom_update_key_userinfo_req)
 
 #define QSEECOM_QTEEC_IOCTL_OPEN_SESSION_REQ \
-	_IOWR(QSEECOM_IOC_MAGIC, 30, struct qseecom_qteec_modfd_req)
+	_IOWR(QSEECOM_IOC_MAGIC, 30, struct qseecom_qteec_req)
 
 #define QSEECOM_QTEEC_IOCTL_CLOSE_SESSION_REQ \
 	_IOWR(QSEECOM_IOC_MAGIC, 31, struct qseecom_qteec_req)
 
 #define QSEECOM_QTEEC_IOCTL_INVOKE_MODFD_CMD_REQ \
-	_IOWR(QSEECOM_IOC_MAGIC, 32, struct qseecom_qteec_modfd_req)
-
-#define QSEECOM_QTEEC_IOCTL_REQUEST_CANCELLATION_REQ \
-	_IOWR(QSEECOM_IOC_MAGIC, 33, struct qseecom_qteec_modfd_req)
+	_IOWR(QSEECOM_IOC_MAGIC, 32, struct qseecom_qteec_req)
 
 #endif /* _UAPI_QSEECOM_H_ */

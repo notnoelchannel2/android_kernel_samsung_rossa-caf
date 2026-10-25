@@ -16,18 +16,6 @@
 
 #include <linux/qdsp6v2/apr.h>
 
-/* size of header needed for passing data out of band */
-#define APR_CMD_OB_HDR_SZ  12
-
-/* size of header needed for getting data */
-#define APR_CMD_GET_HDR_SZ 16
-
-struct param_outband {
-	size_t       size;
-	void        *kvaddr;
-	phys_addr_t  paddr;
-};
-
 #define ADSP_ADM_VERSION    0x00070000
 
 #define ADM_CMD_SHARED_MEM_MAP_REGIONS    0x00010322
@@ -2453,32 +2441,6 @@ struct afe_port_cmdrsp_get_param_v2 {
 	u32                  status;
 } __packed;
 
-#define AFE_PARAM_ID_LPASS_CORE_SHARED_CLOCK_CONFIG	0x0001028C
-#define AFE_API_VERSION_LPASS_CORE_SHARED_CLK_CONFIG	0x1
-/*
- * Payload of the AFE_PARAM_ID_LPASS_CORE_SHARED_CLOCK_CONFIG parameter used by
- * AFE_MODULE_AUDIO_DEV_INTERFACE.
-*/
-struct afe_param_id_lpass_core_shared_clk_cfg {
-	u32	lpass_core_shared_clk_cfg_minor_version;
-/*
- * Minor version used for lpass core shared clock configuration
- * Supported value: AFE_API_VERSION_LPASS_CORE_SHARED_CLK_CONFIG
- */
-	u32	enable;
-/*
- * Specifies whether the lpass core shared clock is
- * enabled (1) or disabled (0).
- */
-} __packed;
-
-struct afe_lpass_core_shared_clk_config_command {
-	struct apr_hdr		   hdr;
-	struct afe_port_cmd_set_param_v2 param;
-	struct afe_port_param_data_v2    pdata;
-	struct afe_param_id_lpass_core_shared_clk_cfg clk_cfg;
-} __packed;
-
 /* adsp_afe_service_commands.h */
 
 #define ADSP_MEMORY_MAP_EBI_POOL      0
@@ -2505,7 +2467,8 @@ struct afe_lpass_core_shared_clk_config_command {
 #define VPM_TX_DM_FLUENCE_COPP_TOPOLOGY			0x00010F72
 #define VPM_TX_QMIC_FLUENCE_COPP_TOPOLOGY		0x00010F75
 #define VPM_TX_DM_RFECNS_COPP_TOPOLOGY			0x00010F86
-#define ADM_CMD_COPP_OPEN_TOPOLOGY_ID_DTS_HPX		0x11000002
+#define ADM_CMD_COPP_OPEN_TOPOLOGY_ID_DTS_HPX_0		0x00010347
+#define ADM_CMD_COPP_OPEN_TOPOLOGY_ID_DTS_HPX_1		0x00010348
 
 /* Memory map regions command payload used by the
  * #ASM_CMD_SHARED_MEM_MAP_REGIONS ,#ADM_CMD_SHARED_MEM_MAP_REGIONS
@@ -7426,6 +7389,113 @@ struct afe_lpass_digital_clk_config_command {
 	struct afe_digital_clk_cfg clk_cfg;
 } __packed;
 
+#ifdef CONFIG_SAMSUNG_AUDIO
+#define ASM_MODULE_ID_PP_SA                 0x10001fa0
+#define ASM_PARAM_ID_PP_SA_PARAMS           0x10001fa1
+
+#define ASM_MODULE_ID_PP_SA_MSP             0x10001ff0
+#define ASM_MODULE_ID_PP_SA_MSP_PARAM       0x10001ff1
+
+#define ASM_MODULE_ID_PP_SA_VSP             0x10001fb0
+#define ASM_PARAM_ID_PP_SA_VSP_PARAMS       0x10001fb1
+
+#define ASM_MODULE_ID_PP_DHA                0x10001fc0
+#define ASM_PARAM_ID_PP_DHA_PARAMS          0x10001fc1
+
+#define ASM_MODULE_ID_PP_LRSM               0x10001fe0
+#define ASM_PARAM_ID_PP_LRSM_PARAMS         0x10001fe1
+
+#define ASM_MODULE_ID_PP_SA_EP              0x10001fd0
+#define ASM_PARAM_ID_PP_SA_EP_PARAMS        0x10001fd1
+#define ASM_PARAM_ID_PP_SA_EP_GET_PARAMS    0x10001fd2
+
+struct sa_params {
+	int16_t OutDevice;
+	int16_t Preset;
+	int32_t EqLev[7];
+	int16_t m3Dlevel;
+	int16_t BElevel;
+	int16_t CHlevel;
+	int16_t CHRoomSize; 
+	int16_t Clalevel;
+	int16_t volume;
+	int16_t Sqrow;
+	int16_t Sqcol;
+	int16_t TabInfo;
+	int16_t NewUI;
+} __packed;
+
+struct vsp_params {
+	uint32_t speed_int;
+} __packed ;
+
+struct dha_params {
+	int32_t enable;
+	int16_t gain[2][6];
+} __packed ;
+
+struct lrsm_params {
+	int16_t sm;
+	int16_t lr;
+} __packed ;
+
+struct sa_ep_params {
+	int32_t enable;
+	int32_t score;
+} __packed ;
+
+struct asm_stream_cmd_set_pp_params_sa {
+	struct apr_hdr	hdr;
+	struct asm_stream_cmd_set_pp_params_v2 param;
+	struct asm_stream_param_data_v2 data;
+
+	struct sa_params sa_param;
+} __packed;
+
+struct asm_stream_cmd_set_pp_params_vsp {
+	struct apr_hdr	hdr;
+	struct asm_stream_cmd_set_pp_params_v2 param;
+	struct asm_stream_param_data_v2 data;
+
+	uint32_t speed_int;
+} __packed;
+
+struct asm_stream_cmd_set_pp_params_dha {
+	struct apr_hdr	hdr;
+	struct asm_stream_cmd_set_pp_params_v2 param;
+	struct asm_stream_param_data_v2 data;
+
+	int32_t enable;
+	int16_t gain[2][6];
+} __packed;
+
+struct asm_stream_cmd_set_pp_params_lrsm {
+	struct apr_hdr	hdr;
+	struct asm_stream_cmd_set_pp_params_v2 param;
+	struct asm_stream_param_data_v2 data;
+
+	int16_t sm;
+	int16_t lr;
+} __packed;
+
+struct asm_stream_cmd_set_pp_params_sa_ep {
+	struct apr_hdr	hdr;
+	struct asm_stream_cmd_set_pp_params_v2 param;
+	struct asm_stream_param_data_v2 data;
+
+	int32_t enable;
+	int32_t score;
+} __packed;
+
+struct asm_stream_cmd_set_pp_params_msp {
+	struct apr_hdr	hdr;
+	struct asm_stream_cmd_set_pp_params_v2 param;
+	struct asm_stream_param_data_v2 data;
+
+	uint32_t msp_int;
+} __packed;
+#endif /* CONFIG_SAMSUNG_AUDIO */
+
 /*
  * Opcode for AFE to start DTMF.
  */
@@ -7630,7 +7700,7 @@ struct afe_svc_cmd_set_clip_bank_selection {
 /* Ultrasound supported formats */
 #define US_POINT_EPOS_FORMAT_V2 0x0001272D
 #define US_RAW_FORMAT_V2        0x0001272C
-#define US_PROX_FORMAT_V4       0x0001273B
+#define US_PROX_FORMAT_V2       0x0001272E
 #define US_RAW_SYNC_FORMAT      0x0001272F
 #define US_GES_SYNC_FORMAT      0x00012730
 

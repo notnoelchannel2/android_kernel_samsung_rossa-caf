@@ -23,7 +23,6 @@
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/usb/phy.h>
-#include <linux/usb/msm_hsusb.h>
 
 #define QUSB2PHY_PORT_POWERDOWN		0xB4
 #define CLAMP_N_EN			BIT(5)
@@ -34,13 +33,6 @@
 #define QUSB2PHY_PORT_TUNE2             0x84
 #define QUSB2PHY_PORT_TUNE3             0x88
 #define QUSB2PHY_PORT_TUNE4             0x8C
-
-#define QUSB2PHY_PORT_INTR_CTRL         0xBC
-#define CHG_DET_INTR_EN                 BIT(4)
-#define DMSE_INTR_HIGH_SEL              BIT(3)
-#define DMSE_INTR_EN                    BIT(2)
-#define DPSE_INTR_HIGH_SEL              BIT(1)
-#define DPSE_INTR_EN                    BIT(0)
 
 #define UTMI_OTG_VBUS_VALID             BIT(20)
 #define SW_SESSVLD_SEL                  BIT(28)
@@ -70,7 +62,6 @@ struct qusb_phy {
 	struct regulator	*vdda33;
 	struct regulator	*vdda18;
 	int			vdd_levels[3]; /* none, low, high */
-	u32			qusb_tune;
 
 	bool			power_enabled;
 	bool			clocks_enabled;
@@ -142,14 +133,8 @@ disable_vdd:
 static int qusb_phy_init(struct usb_phy *phy)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
-	int ret;
-	u32 t1, t2, t3, t4;
 
 	dev_dbg(phy->dev, "%s\n", __func__);
-
-	ret = qusb_phy_enable_power(qphy, true);
-	if (ret)
-		return ret;
 
 	if (!qphy->clocks_enabled) {
 		clk_prepare_enable(qphy->ref_clk);
@@ -192,20 +177,13 @@ static int qusb_phy_init(struct usb_phy *phy)
 		if (qphy->ulpi_mode)
 			writel_relaxed(0x0,
 					qphy->base + QUSB2PHY_PORT_UTMI_CTRL2);
-		if (qphy->qusb_tune) {
 
-			t1 = qphy->qusb_tune >> 24;
-			t2 = (qphy->qusb_tune) >> 16 & 0xFF;
-			t3 = (qphy->qusb_tune) >> 8 & 0xFF;
-			t4 = (qphy->qusb_tune) & 0xFF;
+		/* Program tuning parameters for PHY */
+		writel_relaxed(0xA0, qphy->base + QUSB2PHY_PORT_TUNE1);
+		writel_relaxed(0xA5, qphy->base + QUSB2PHY_PORT_TUNE2);
+		writel_relaxed(0x81, qphy->base + QUSB2PHY_PORT_TUNE3);
+		writel_relaxed(0x85, qphy->base + QUSB2PHY_PORT_TUNE4);
 
-			/* Program tuning parameters for PHY */
-			writel_relaxed(t1, qphy->base + QUSB2PHY_PORT_TUNE1);
-			writel_relaxed(t2, qphy->base + QUSB2PHY_PORT_TUNE2);
-			writel_relaxed(t3, qphy->base + QUSB2PHY_PORT_TUNE3);
-			writel_relaxed(t4, qphy->base + QUSB2PHY_PORT_TUNE4);
-
-		}
 		/* ensure above writes are completed before re-enabling PHY */
 		wmb();
 
@@ -268,7 +246,6 @@ static void qusb_write_readback(void *base, u32 offset,
 static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 {
 	struct qusb_phy *qphy = container_of(phy, struct qusb_phy, phy);
-	u32 intr_mask = 0;
 
 	if (!qphy->clocks_enabled) {
 		dev_dbg(phy->dev, "clocks not enabled yet\n");
@@ -282,44 +259,26 @@ static int qusb_phy_set_suspend(struct usb_phy *phy, int suspend)
 	}
 
 	if (suspend) {
-		/* Bus suspend case */
-		if (qphy->cable_connected ||
-			(qphy->phy.flags & PHY_HOST_MODE)) {
-			/* Clear all interrupts */
-			writel_relaxed(0x00,
-				qphy->base + QUSB2PHY_PORT_INTR_CTRL);
-
-			/* Enable D+ interrupt */
-			intr_mask |= DPSE_INTR_EN;
-
-			/* Select D+ falling edge as the trigger */
-			intr_mask &= ~DPSE_INTR_HIGH_SEL;
-
-			writel_relaxed(intr_mask,
-				qphy->base + QUSB2PHY_PORT_INTR_CTRL);
-
-			clk_disable_unprepare(qphy->cfg_ahb_clk);
-			clk_disable_unprepare(qphy->ref_clk);
+		/* Suspend case */
+		if (qphy->cable_connected) {
+			return -EAGAIN;
 		} else { /* Disconnect case */
+			/* Disable the PHY */
+			writel_relaxed(CLAMP_N_EN | FREEZIO_N | POWER_DOWN,
+				qphy->base + QUSB2PHY_PORT_POWERDOWN);
 			clk_disable_unprepare(qphy->cfg_ahb_clk);
 			clk_disable_unprepare(qphy->ref_clk);
 			qusb_phy_enable_power(qphy, false);
 		}
 		qphy->suspended = true;
 	} else {
-		/* Bus suspend case */
-		if (qphy->cable_connected ||
-			(qphy->phy.flags & PHY_HOST_MODE)) {
-			clk_prepare_enable(qphy->ref_clk);
-			clk_prepare_enable(qphy->cfg_ahb_clk);
-			/* Clear all interrupts on resume */
-			writel_relaxed(0x00,
-				qphy->base + QUSB2PHY_PORT_INTR_CTRL);
-		} else {
-			qusb_phy_enable_power(qphy, true);
-			clk_prepare_enable(qphy->ref_clk);
-			clk_prepare_enable(qphy->cfg_ahb_clk);
-		}
+		qusb_phy_enable_power(qphy, true);
+		clk_prepare_enable(qphy->ref_clk);
+		clk_prepare_enable(qphy->cfg_ahb_clk);
+		/* Enable the PHY */
+		writel_relaxed(CLAMP_N_EN | FREEZIO_N,
+			qphy->base + QUSB2PHY_PORT_POWERDOWN);
+		/* Caller needs to call qusb_phy_init to apply tuning params */
 		qphy->suspended = false;
 	}
 
@@ -411,8 +370,6 @@ static int qusb_phy_probe(struct platform_device *pdev)
 	qphy->emulation = of_property_read_bool(dev->of_node,
 						"qcom,emulation");
 
-	of_property_read_u32(dev->of_node, "qcom,qusb-tune", &qphy->qusb_tune);
-
 	qphy->ulpi_mode = false;
 	ret = of_property_read_string(dev->of_node, "phy_type", &phy_type);
 
@@ -449,6 +406,14 @@ static int qusb_phy_probe(struct platform_device *pdev)
 		dev_err(dev, "unable to get vdda18 supply\n");
 		return PTR_ERR(qphy->vdda18);
 	}
+
+	ret = qusb_phy_enable_power(qphy, true);
+	if (ret)
+		return ret;
+
+	clk_prepare_enable(qphy->ref_clk);
+	clk_prepare_enable(qphy->cfg_ahb_clk);
+	qphy->clocks_enabled = true;
 
 	platform_set_drvdata(pdev, qphy);
 

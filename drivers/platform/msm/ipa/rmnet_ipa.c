@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -55,15 +55,13 @@ static int num_q6_rule, old_num_q6_rule;
 static int rmnet_index;
 static bool egress_set, a7_ul_flt_set;
 static struct workqueue_struct *ipa_rm_q6_workqueue; /* IPA_RM workqueue*/
+static struct workqueue_struct *ipa_ssr_workqueue; /* IPA SSR workqueue*/
 static atomic_t is_initialized;
 static atomic_t is_ssr;
 
 u32 apps_to_ipa_hdl, ipa_to_apps_hdl; /* get handler from ipa */
 static int wwan_add_ul_flt_rule_to_ipa(void);
 static int wwan_del_ul_flt_rule_to_ipa(void);
-
-static void wake_tx_queue(struct work_struct *work);
-static DECLARE_WORK(ipa_tx_wakequeue_work, wake_tx_queue);
 
 enum wwan_device_status {
 	WWAN_DEVICE_INACTIVE = 0,
@@ -174,7 +172,7 @@ static void ipa_del_a7_qmap_hdr(void)
 	if (ret || hdl_entry->status)
 		IPAWANERR("ipa_del_hdr failed\n");
 	else
-		IPAWANDBG("hdrs deletion done\n");
+		IPAWANERR("hdrs deletion done\n");
 
 	qmap_hdr_hdl = 0;
 	kfree(del_hdr);
@@ -209,7 +207,7 @@ static void ipa_del_qmap_hdr(uint32_t hdr_hdl)
 	if (ret || hdl_entry->status)
 		IPAWANERR("ipa_del_hdr failed\n");
 	else
-		IPAWANDBG("header deletion done\n");
+		IPAWANERR("header deletion done\n");
 
 	qmap_hdr_hdl = 0;
 	kfree(del_hdr);
@@ -386,14 +384,6 @@ int copy_ul_filter_rule_to_ipa(struct ipa_install_fltr_rule_req_msg_v01
 	}
 	/* copy UL filter rules from Modem*/
 	for (i = 0; i < num_q6_rule; i++) {
-		/* check if rules overside the cache*/
-		if (i == MAX_NUM_Q6_RULE) {
-			IPAWANERR("Reaching (%d) max cache ",
-				MAX_NUM_Q6_RULE);
-			IPAWANERR(" however total (%d)\n",
-				num_q6_rule);
-			break;
-		}
 		/* construct UL_filter_rule handler QMI use-cas */
 		q6_ul_filter_rule[i].filter_hdl =
 			UL_FILTER_RULE_HANDLE_START + i;
@@ -1053,8 +1043,7 @@ static void apps_ipa_packet_receive_notify(void *priv,
 
 	result = netif_rx(skb);
 	if (result)	{
-		pr_err_ratelimited(DEV_NAME " %s:%d fail on netif_rx\n",
-				__func__, __LINE__);
+		IPAWANERR("fail on netif_rx\n");
 		dev->stats.rx_dropped++;
 	}
 	dev->stats.rx_packets++;
@@ -1233,6 +1222,11 @@ static int ipa_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 					rmnet_mux_val.mux_id);
 				return rc;
 			}
+			if (rmnet_index >= MAX_NUM_OF_MUX_CHANNEL) {
+				IPAWANERR("Exceed mux_channel limit(%d)\n",
+				rmnet_index);
+				return -EFAULT;
+			}
 			IPAWANDBG("ADD_MUX_CHANNEL(%d, name: %s)\n",
 			extend_ioctl_data.u.rmnet_mux_val.mux_id,
 			extend_ioctl_data.u.rmnet_mux_val.vchannel_name);
@@ -1272,15 +1266,10 @@ static int ipa_wwan_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		case RMNET_IOCTL_SET_EGRESS_DATA_FORMAT:
 			IPAWANDBG("get RMNET_IOCTL_SET_EGRESS_DATA_FORMAT\n");
 			if ((extend_ioctl_data.u.data) &
-					RMNET_IOCTL_EGRESS_FORMAT_CHECKSUM) {
+					RMNET_IOCTL_EGRESS_FORMAT_CHECKSUM)
 				apps_to_ipa_ep_cfg.ipa_ep_cfg.hdr.hdr_len = 8;
-				apps_to_ipa_ep_cfg.ipa_ep_cfg.cfg.
-					cs_offload_en = 1;
-				apps_to_ipa_ep_cfg.ipa_ep_cfg.cfg.
-					cs_metadata_hdr_offset = 1;
-			} else {
+			else
 				apps_to_ipa_ep_cfg.ipa_ep_cfg.hdr.hdr_len = 4;
-			}
 			if ((extend_ioctl_data.u.data) &
 					RMNET_IOCTL_EGRESS_FORMAT_AGGREGATION)
 				apps_to_ipa_ep_cfg.ipa_ep_cfg.aggr.aggr_en =
@@ -1581,12 +1570,6 @@ void q6_deinitialize_rm(void)
 	destroy_workqueue(ipa_rm_q6_workqueue);
 }
 
-static void wake_tx_queue(struct work_struct *work)
-{
-	if (ipa_netdevs[0])
-		netif_wake_queue(ipa_netdevs[0]);
-}
-
 /**
  * ipa_rm_resource_granted() - Called upon
  * IPA_RM_RESOURCE_GRANTED event. Wakes up queue is was stopped.
@@ -1599,7 +1582,7 @@ static void wake_tx_queue(struct work_struct *work)
 static void ipa_rm_resource_granted(void *dev)
 {
 	IPAWANDBG("Resource Granted - starting queue\n");
-	schedule_work(&ipa_tx_wakequeue_work);
+	netif_start_queue(dev);
 }
 
 /**
@@ -1639,6 +1622,9 @@ static void ipa_rm_notify(void *dev, enum ipa_rm_event event,
 
 /* IPA_RM related functions end*/
 
+static void ssr_ipa_wwan_remove(struct work_struct *work);
+static DECLARE_DELAYED_WORK(ssr_ipa_wwan_remove_request, ssr_ipa_wwan_remove);
+
 static int ssr_notifier_cb(struct notifier_block *this,
 			   unsigned long code,
 			   void *data);
@@ -1655,12 +1641,12 @@ static int get_ipa_rmnet_dts_configuration(struct platform_device *pdev,
 	ipa_rmnet_drv_res->ipa_rmnet_ssr =
 			of_property_read_bool(pdev->dev.of_node,
 			"qcom,rmnet-ipa-ssr");
-	pr_info("IPA SSR support = %s\n",
+	IPAWANERR(": IPA SSR support = %s",
 		ipa_rmnet_drv_res->ipa_rmnet_ssr ? "True" : "False");
 	ipa_rmnet_drv_res->ipa_loaduC =
 			of_property_read_bool(pdev->dev.of_node,
 			"qcom,ipa-loaduC");
-	pr_info("IPA ipa-loaduC = %s\n",
+	IPAWANERR(": IPA ipa-loaduC = %s",
 		ipa_rmnet_drv_res->ipa_loaduC ? "True" : "False");
 
 	return 0;
@@ -1685,8 +1671,6 @@ static int ipa_wwan_probe(struct platform_device *pdev)
 	struct wwan_private *wwan_ptr;
 	struct ipa_rm_create_params ipa_rm_params;	/* IPA_RM */
 	struct ipa_rm_perf_profile profile;			/* IPA_RM */
-
-	pr_info("rmnet_ipa started initialization\n");
 
 	if (!ipa_is_ready()) {
 		IPAWANERR("IPA driver not loaded\n");
@@ -1823,7 +1807,6 @@ static int ipa_wwan_probe(struct platform_device *pdev)
 	atomic_set(&is_initialized, 1);
 	atomic_set(&is_ssr, 0);
 
-	pr_info("rmnet_ipa completed initialization\n");
 	return 0;
 config_err:
 	unregister_netdev(ipa_netdevs[0]);
@@ -1863,6 +1846,7 @@ setup_a7_qmap_hdr_err:
 		IPAWANERR(
 		"Error subsys_notif_unregister_notifier system %s, ret=%d\n",
 		SUBSYS_MODEM, ret);
+	destroy_workqueue(ipa_ssr_workqueue);
 	atomic_set(&is_ssr, 0);
 	return ret;
 }
@@ -1871,12 +1855,6 @@ static int ipa_wwan_remove(struct platform_device *pdev)
 {
 	int ret;
 
-	pr_info("rmnet_ipa started deinitialization\n");
-	ret = ipa_teardown_sys_pipe(ipa_to_apps_hdl);
-	if (ret < 0)
-		IPAWANERR("Failed to teardown IPA->APPS pipe\n");
-	else
-		ipa_to_apps_hdl = 0;
 	unregister_netdev(ipa_netdevs[0]);
 	ret = ipa_rm_delete_dependency(IPA_RM_RESOURCE_WWAN_0_PROD,
 		IPA_RM_RESOURCE_Q6_CONS);
@@ -1893,7 +1871,6 @@ static int ipa_wwan_remove(struct platform_device *pdev)
 	if (ret < 0)
 		IPAWANERR("Error deleting resource %d, ret=%d\n",
 		IPA_RM_RESOURCE_WWAN_0_PROD, ret);
-	cancel_work_sync(&ipa_tx_wakequeue_work);
 	free_netdev(ipa_netdevs[0]);
 	ipa_netdevs[0] = NULL;
 	/* No need to remove wwan_ioctl during SSR */
@@ -1906,64 +1883,7 @@ static int ipa_wwan_remove(struct platform_device *pdev)
 	wwan_del_ul_flt_rule_to_ipa();
 	ipa_cleanup_deregister_intf();
 	atomic_set(&is_initialized, 0);
-	pr_info("rmnet_ipa completed deinitialization\n");
-	return 0;
-}
-
-/**
-* rmnet_ipa_ap_suspend() - suspend callback for runtime_pm
-* @dev: pointer to device
-*
-* This callback will be invoked by the runtime_pm framework when an AP suspend
-* operation is invoked, usually by pressing a suspend button.
-*
-* Returns -EAGAIN to runtime_pm framework in case there are pending packets
-* in the Tx queue. This will postpone the suspend operation until all the
-* pending packets will be transmitted.
-*
-* In case there are no packets to send, releases the WWAN0_PROD entity.
-* As an outcome, the number of IPA active clients should be decremented
-* until IPA clocks can be gated.
-*/
-static int rmnet_ipa_ap_suspend(struct device *dev)
-{
-	struct net_device *netdev = ipa_netdevs[0];
-	struct wwan_private *wwan_ptr = netdev_priv(netdev);
-
-	IPAWANDBG("Enter...\n");
-	/* Do not allow A7 to suspend in case there are oustanding packets */
-	if (atomic_read(&wwan_ptr->outstanding_pkts) != 0) {
-		IPAWANDBG("Outstanding packets, postponing AP suspend.\n");
-		return -EAGAIN;
-	}
-
-	/* Make sure that there is no Tx operation ongoing */
-	netif_tx_lock_bh(netdev);
-	ipa_rm_release_resource(IPA_RM_RESOURCE_WWAN_0_PROD);
-	netif_tx_unlock_bh(netdev);
-	IPAWANDBG("Exit\n");
-
-	return 0;
-}
-
-/**
-* rmnet_ipa_ap_resume() - resume callback for runtime_pm
-* @dev: pointer to device
-*
-* This callback will be invoked by the runtime_pm framework when an AP resume
-* operation is invoked.
-*
-* Enables the network interface queue and returns success to the
-* runtime_pm framwork.
-*/
-static int rmnet_ipa_ap_resume(struct device *dev)
-{
-	struct net_device *netdev = ipa_netdevs[0];
-
-	IPAWANDBG("Enter...\n");
-	netif_wake_queue(netdev);
-	IPAWANDBG("Exit\n");
-
+	IPAWANDBG("rmnet_ipa completed deinitialization\n");
 	return 0;
 }
 
@@ -1973,16 +1893,10 @@ static const struct of_device_id rmnet_ipa_dt_match[] = {
 };
 MODULE_DEVICE_TABLE(of, rmnet_ipa_dt_match);
 
-static const struct dev_pm_ops rmnet_ipa_pm_ops = {
-	.suspend_noirq = rmnet_ipa_ap_suspend,
-	.resume_noirq = rmnet_ipa_ap_resume,
-};
-
 static struct platform_driver rmnet_ipa_driver = {
 	.driver = {
 		.name = "rmnet_ipa",
 		.owner = THIS_MODULE,
-		.pm = &rmnet_ipa_pm_ops,
 		.of_match_table = rmnet_ipa_dt_match,
 	},
 	.probe = ipa_wwan_probe,
@@ -1995,21 +1909,17 @@ static int ssr_notifier_cb(struct notifier_block *this,
 {
 	if (ipa_rmnet_ctx.ipa_rmnet_ssr) {
 		if (SUBSYS_BEFORE_SHUTDOWN == code) {
-			pr_info("IPA received MPSS BEFORE_SHUTDOWN\n");
 			ipa_q6_cleanup();
 			wan_ioctl_stop_qmi_messages();
+			queue_delayed_work(ipa_ssr_workqueue,
+				&ssr_ipa_wwan_remove_request, 0);
 			atomic_set(&is_ssr, 1);
-			if (atomic_read(&is_initialized))
-				platform_driver_unregister(&rmnet_ipa_driver);
-			pr_info("IPA BEFORE_SHUTDOWN handling is complete\n");
 			return NOTIFY_DONE;
 		}
 		if (SUBSYS_AFTER_POWERUP == code) {
-			pr_info("IPA received MPSS AFTER_POWERUP\n");
 			if (!atomic_read(&is_initialized)
 				&& atomic_read(&is_ssr))
 				platform_driver_register(&rmnet_ipa_driver);
-			pr_info("IPA AFTER_POWERUP handling is complete\n");
 			return NOTIFY_DONE;
 		}
 	}
@@ -2022,17 +1932,30 @@ static int __init ipa_wwan_init(void)
 
 	atomic_set(&is_initialized, 0);
 	atomic_set(&is_ssr, 0);
+	/* Initialize IPA SSR workqueue */
+	ipa_ssr_workqueue = create_singlethread_workqueue("ssr_req");
+	if (!ipa_ssr_workqueue)
+		return -ENOMEM;
 
-	/* Register for Modem SSR */
 	subsys = subsys_notif_register_notifier(SUBSYS_MODEM, &ssr_notifier);
-	if (!IS_ERR(subsys))
+	if (!IS_ERR(subsys)) {
 		return platform_driver_register(&rmnet_ipa_driver);
-	else
+	} else {
+		destroy_workqueue(ipa_ssr_workqueue);
 		return (int)PTR_ERR(subsys);
 	}
+}
 
 static void __exit ipa_wwan_cleanup(void)
 {
+	platform_driver_unregister(&rmnet_ipa_driver);
+}
+
+static void ssr_ipa_wwan_remove(struct work_struct *work)
+{
+	if (!atomic_read(&is_initialized))
+		return;
+
 	platform_driver_unregister(&rmnet_ipa_driver);
 }
 

@@ -1,7 +1,7 @@
 /* arch/arm/mach-msm/include/mach/board.h
  *
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2008-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
  * Author: Brian Swetland <swetland@google.com>
  *
  * This software is licensed under the terms of the GNU General Public
@@ -27,7 +27,6 @@
 #include <linux/ssbi.h>
 #include <linux/msm-bus.h>
 
-#define RF_TYPE_4  0x4
 #define RF_TYPE_16 0x10
 #define RF_TYPE_17 0x11
 #define RF_TYPE_18 0x12
@@ -193,8 +192,8 @@ struct msm_gpio_set_tbl {
 };
 
 struct msm_camera_gpio_num_info {
-	uint16_t gpio_num[10];
-	uint8_t valid[10];
+	uint16_t gpio_num[16];
+	uint8_t valid[16];
 };
 
 struct msm_camera_gpio_conf {
@@ -635,8 +634,7 @@ void msm_map_fsm9010_io(void);
 void msm_map_8974_io(void);
 void msm_map_8084_io(void);
 void msm_map_mdm9630_io(void);
-void msm_map_mdm9640_io(void);
-void msm_map_msmvpipa_io(void);
+void msm_map_msmzirc_io(void);
 void msm_map_msm8625_io(void);
 void msm_map_msm9625_io(void);
 void msm_init_irq(void);

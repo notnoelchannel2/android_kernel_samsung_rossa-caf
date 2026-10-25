@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,7 +17,6 @@
 #include <linux/platform_device.h>
 #include <linux/stringify.h>
 #include <linux/types.h>
-#include <linux/debugfs.h>
 
 /* panel id type */
 struct panel_id {
@@ -29,6 +28,7 @@ struct panel_id {
 #define DEFAULT_ROTATOR_FRAME_RATE 120
 #define MDSS_DSI_RST_SEQ_LEN	10
 #define MDSS_MDP_MAX_FETCH 12
+#define MAX_PANEL_NAME_SIZE 100
 
 /* panel type list */
 #define NO_PANEL		0xffff	/* No Panel */
@@ -53,12 +53,11 @@ static inline const char *mdss_panel2str(u32 panel)
 		PANEL_NAME(MIPI_CMD),
 		PANEL_NAME(EDP),
 		PANEL_NAME(HDMI),
-		PANEL_NAME(DTV),
 		PANEL_NAME(WRITEBACK),
 #undef PANEL_NAME
 	};
 
-	if (panel >= ARRAY_SIZE(names) || !names[panel])
+	if (panel >= ARRAY_SIZE(names))
 		return "UNKNOWN";
 
 	return names[panel];
@@ -91,14 +90,16 @@ enum {
 enum {
 	MDSS_PANEL_POWER_OFF = 0,
 	MDSS_PANEL_POWER_ON,
-	MDSS_PANEL_POWER_LP1,
-	MDSS_PANEL_POWER_LP2,
+	MDSS_PANEL_POWER_DOZE,
 };
 
 enum {
 	MDSS_PANEL_BLANK_BLANK = 0,
 	MDSS_PANEL_BLANK_UNBLANK,
 	MDSS_PANEL_BLANK_LOW_POWER,
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	MDSS_PANEL_BLANK_READY_TO_UNBLANK,
+#endif
 };
 
 enum {
@@ -181,6 +182,8 @@ struct mdss_intf_recovery {
  *				- 1: update to command mode
  * @MDSS_EVENT_REGISTER_RECOVERY_HANDLER: Event to recover the interface in
  *					case there was any errors detected.
+ * @MDSS_EVENT_INTF_RESTORE: Event to restore the interface in case there
+ *				was any errors detected during normal operation.
  */
 enum mdss_intf_events {
 	MDSS_EVENT_RESET = 1,
@@ -203,6 +206,11 @@ enum mdss_intf_events {
 	MDSS_EVENT_DSI_STREAM_SIZE,
 	MDSS_EVENT_DSI_DYNAMIC_SWITCH,
 	MDSS_EVENT_REGISTER_RECOVERY_HANDLER,
+	MDSS_EVENT_INTF_RESTORE,
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	MDSS_SAMSUNG_EVENT_FRAME_UPDATE,
+	MDSS_SAMSUNG_EVENT_FB_EVENT_CALLBACK,
+#endif
 };
 
 struct lcd_panel_info {
@@ -215,10 +223,6 @@ struct lcd_panel_info {
 	u32 border_clr;
 	u32 underflow_clr;
 	u32 hsync_skew;
-	u32 border_top;
-	u32 border_bottom;
-	u32 border_left;
-	u32 border_right;
 	/* Pad width */
 	u32 xres_pad;
 	/* Pad height */
@@ -292,6 +296,7 @@ struct mipi_panel_info {
 
 	char lp11_init;
 	u32  init_delay;
+	u32  power_off_delay;
 };
 
 struct edp_panel_info {
@@ -301,8 +306,7 @@ struct edp_panel_info {
 enum dynamic_fps_update {
 	DFPS_SUSPEND_RESUME_MODE,
 	DFPS_IMMEDIATE_CLK_UPDATE_MODE,
-	DFPS_IMMEDIATE_PORCH_UPDATE_MODE_VFP,
-	DFPS_IMMEDIATE_PORCH_UPDATE_MODE_HFP,
+	DFPS_IMMEDIATE_PORCH_UPDATE_MODE,
 };
 
 enum lvds_mode {
@@ -398,6 +402,7 @@ struct mdss_panel_info {
 	u32 max_fps;
 
 	u32 cont_splash_enabled;
+	bool esd_rdy;
 	u32 partial_update_enabled;
 	u32 dcs_cmd_by_left;
 	u32 partial_update_roi_merge;
@@ -421,15 +426,36 @@ struct mdss_panel_info {
 	struct mipi_panel_info mipi;
 	struct lvds_panel_info lvds;
 	struct edp_panel_info edp;
-
-	/* debugfs structure for the panel */
-	struct mdss_panel_debugfs_info *debugfs_info;
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	int panel_state;
+#endif
 };
 
+struct mipi_samsung_driver_data {
+	struct msm_fb_data_type *mfd;
+	struct mdss_panel_data *pdata;
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata;
+	struct mutex lock;
+
+#if defined(CONFIG_HAS_EARLYSUSPEND)
+	struct early_suspend early_suspend;
+#endif
+	char panel_name[MAX_PANEL_NAME_SIZE];
+	int panel;
+	unsigned int manufacture_id;
+	unsigned int manufacture_date;
+	char ddi_id[5];
+	unsigned int id3;
+	struct smartdim_conf *sdimconf;
+	struct lcd_device *lcd_device;
+	void *mdss_panel_data;
+	void *mdss_dsi_ctrl_pdata;
+};
 struct mdss_panel_data {
 	struct mdss_panel_info panel_info;
 	void (*set_backlight) (struct mdss_panel_data *pdata, u32 bl_level);
 	unsigned char *mmss_cc_base;
+	struct mipi_samsung_driver_data samsung_pdata;
 
 	/**
 	 * event_handler() - callback handler for MDP core events
@@ -446,17 +472,9 @@ struct mdss_panel_data {
 	int (*event_handler) (struct mdss_panel_data *pdata, int e, void *arg);
 
 	struct mdss_panel_data *next;
-};
-
-struct mdss_panel_debugfs_info {
-	struct dentry *root;
-	u32 xres;
-	u32 yres;
-	struct lcd_panel_info lcdc;
-	struct fbc_panel_info fbc;
-	u32 override_flag;
-	char frame_rate;
-	struct mdss_panel_debugfs_info *next;
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	void *panel_private;
+#endif
 };
 
 /**
@@ -524,9 +542,7 @@ static inline int mdss_panel_get_vtotal(struct mdss_panel_info *pinfo)
 {
 	return pinfo->yres + pinfo->lcdc.v_back_porch +
 			pinfo->lcdc.v_front_porch +
-			pinfo->lcdc.v_pulse_width+
-			pinfo->lcdc.border_top +
-			pinfo->lcdc.border_bottom;
+			pinfo->lcdc.v_pulse_width;
 }
 
 /*
@@ -542,43 +558,15 @@ static inline int mdss_panel_get_vtotal(struct mdss_panel_info *pinfo)
 static inline int mdss_panel_get_htotal(struct mdss_panel_info *pinfo, bool
 		consider_fbc)
 {
-	int adj_xres = pinfo->xres + pinfo->lcdc.border_left +
-				pinfo->lcdc.border_right;
+	int adj_xres = pinfo->xres;
 
 	if (consider_fbc && pinfo->fbc.enabled)
-		adj_xres = mult_frac(adj_xres,
+		adj_xres = mult_frac(pinfo->xres,
 				pinfo->fbc.target_bpp, pinfo->bpp);
 
 	return adj_xres + pinfo->lcdc.h_back_porch +
 		pinfo->lcdc.h_front_porch +
 		pinfo->lcdc.h_pulse_width;
-}
-
-/**
- * mdss_mdp_max_fetch_lines: - Number of fetch lines in vertical front porch
- * @pinfo:	Pointer to panel info containing all panel information
- *
- * Returns the number of fetch lines in vertical front porch at which mdp
- * can start fetching the next frame.
- *
- * In some cases, vertical front porch is too high. In such cases limit
- * the mdp fetch lines  as the last 12 lines of vertical front porch.
- */
-static inline int mdss_mdp_max_fetch_lines(struct mdss_panel_info *pinfo)
-{
-	int fetch_lines;
-	int v_total, vfp_start;
-
-	v_total = mdss_panel_get_vtotal(pinfo);
-	vfp_start = (pinfo->lcdc.v_back_porch + pinfo->lcdc.v_pulse_width +
-			pinfo->yres);
-
-	fetch_lines = v_total - vfp_start;
-
-	if (fetch_lines > MDSS_MDP_MAX_FETCH)
-		fetch_lines = MDSS_MDP_MAX_FETCH;
-
-	return fetch_lines;
 }
 
 int mdss_register_panel(struct platform_device *pdev,
@@ -625,26 +613,13 @@ static inline bool mdss_panel_is_power_on(int panel_power_state)
  * @panel_power_state: enum identifying the power state to be checked
  *
  * This function returns true if the panel is in an intermediate low power
- * state where it is still on but not fully interactive. It may or may not
- * accept any commands and display updates.
+ * state where it is still on but not fully interactive. It may still accept
+ * commands and display updates but would be operating in a low power mode.
  */
 static inline bool mdss_panel_is_power_on_lp(int panel_power_state)
 {
 	return !mdss_panel_is_power_off(panel_power_state) &&
 		!mdss_panel_is_power_on_interactive(panel_power_state);
-}
-
-/**
- * mdss_panel_is_panel_power_on_ulp: - checks if panel is in ultra low power mode
- * @pdata: pointer to the panel struct associated to the panel
- * @panel_power_state: enum identifying the power state to be checked
- *
- * This function returns true if the panel is in a ultra low power
- * state where it is still on but cannot recieve any display updates.
- */
-static inline bool mdss_panel_is_power_on_ulp(int panel_power_state)
-{
-	return panel_power_state == MDSS_PANEL_POWER_LP2;
 }
 
 /**
@@ -679,16 +654,4 @@ int mdss_panel_get_boot_cfg(void);
  * returns true if mdss is ready, else returns false.
  */
 bool mdss_is_ready(void);
-#ifdef CONFIG_FB_MSM_MDSS
-int mdss_panel_debugfs_init(struct mdss_panel_info *panel_info);
-void mdss_panel_debugfs_cleanup(struct mdss_panel_info *panel_info);
-void mdss_panel_debugfsinfo_to_panelinfo(struct mdss_panel_info *panel_info);
-#else
-static inline int mdss_panel_debugfs_init(
-			struct mdss_panel_info *panel_info) { return 0; };
-static inline void mdss_panel_debugfs_cleanup(
-			struct mdss_panel_info *panel_info) { };
-static inline void mdss_panel_debugfsinfo_to_panelinfo(
-			struct mdss_panel_info *panel_info) { };
-#endif
 #endif /* MDSS_PANEL_H */

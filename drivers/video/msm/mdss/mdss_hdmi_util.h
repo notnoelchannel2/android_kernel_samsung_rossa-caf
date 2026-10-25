@@ -255,18 +255,12 @@ struct hdmi_tx_ddc_data {
 	int retry;
 };
 
-struct hdmi_util_ds_data {
-	bool ds_registered;
-	u32 ds_max_clk;
-};
-
 /* video timing related utility routines */
-int hdmi_get_video_id_code(struct msm_hdmi_mode_timing_info *timing_in,
-	struct hdmi_util_ds_data *ds_data);
-int hdmi_get_supported_mode(struct msm_hdmi_mode_timing_info *info,
-	struct hdmi_util_ds_data *ds_data, u32 mode);
+void hdmi_setup_video_mode_lut(void);
+int hdmi_get_video_id_code(struct msm_hdmi_mode_timing_info *timing_in);
+const struct msm_hdmi_mode_timing_info *hdmi_get_supported_mode(u32 mode);
+void hdmi_del_supported_mode(u32 mode);
 ssize_t hdmi_get_video_3d_fmt_2string(u32 format, char *buf, u32 size);
-const char *msm_hdmi_mode_2string(u32 mode);
 
 /* todo: Fix this. Right now this is defined in mdss_hdmi_tx.c */
 void *hdmi_get_featuredata_from_sysfs_dev(struct device *device, u32 type);

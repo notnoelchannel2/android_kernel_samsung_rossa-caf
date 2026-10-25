@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,8 +20,6 @@
 #include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_platform.h>
-#include <linux/pm_opp.h>
 #include <soc/qcom/clock-local2.h>
 #include <soc/qcom/clock-pll.h>
 #include <soc/qcom/clock-voter.h>
@@ -64,7 +62,6 @@ static void __iomem *virt_bases[N_BASES];
 #define GPLL2_USER_CTL					0x25010
 #define GPLL2_CONFIG_CTL				0x25018
 #define GPLL2_STATUS					0x25024
-#define SNOC_QOSGEN					0x2601C
 #define MSS_CFG_AHB_CBCR				0x49000
 #define MSS_Q6_BIMC_AXI_CBCR				0x49004
 #define QPIC_AHB_CBCR					0x3F01C
@@ -293,7 +290,7 @@ enum vdd_dig_levels {
 
 static int vdd_corner[] = {
 	RPM_REGULATOR_CORNER_NONE,              /* VDD_DIG_NONE */
-	RPM_REGULATOR_CORNER_SVS_KRAIT,         /* VDD_DIG_LOW SVS */
+	RPM_REGULATOR_CORNER_SVS_SOC,           /* VDD_DIG_LOW */
 	RPM_REGULATOR_CORNER_NORMAL,            /* VDD_DIG_NOMINAL */
 	RPM_REGULATOR_CORNER_SUPER_TURBO,       /* VDD_DIG_HIGH */
 };
@@ -2128,18 +2125,6 @@ static struct branch_clk gcc_venus0_vcodec0_clk = {
 	},
 };
 
-static struct gate_clk gcc_snoc_qosgen_clk = {
-	.en_mask = BIT(0),
-	.en_reg = SNOC_QOSGEN,
-	.base = &virt_bases[GCC_BASE],
-	.c = {
-		.dbg_name = "gcc_snoc_qosgen_clk",
-		.ops = &clk_ops_gate,
-		.flags = CLKFLAG_SKIP_HANDOFF,
-		CLK_INIT(gcc_snoc_qosgen_clk.c),
-	},
-};
-
 static struct mux_clk gcc_debug_mux;
 static struct clk_ops clk_ops_debug_mux;
 
@@ -2362,7 +2347,6 @@ static struct mux_clk gcc_debug_mux = {
 		{ &gcc_mdss_vsync_clk.c, 0x01fb },
 		{ &gcc_mdss_byte0_clk.c, 0x01fc },
 		{ &gcc_mdss_esc0_clk.c, 0x01fd },
-		{ &wcnss_m_clk.c, 0x0198},
 	),
 	.c = {
 		.dbg_name = "gcc_debug_mux",
@@ -2497,7 +2481,6 @@ static struct clk_lookup msm_clocks_lookup[] = {
 	CLK_LIST(gcc_bimc_gpu_clk),
 	CLK_LIST(gcc_venus0_core0_vcodec0_clk),
 	CLK_LIST(gcc_usb_hs_phy_cfg_ahb_clk),
-	CLK_LIST(wcnss_m_clk),
 
 	/* Crypto clocks */
 	CLK_LIST(gcc_crypto_clk),
@@ -2508,80 +2491,14 @@ static struct clk_lookup msm_clocks_lookup[] = {
 	/* Reset clocks */
 	CLK_LIST(gcc_usb2_hs_phy_only_clk),
 	CLK_LIST(gcc_qusb2_phy_clk),
-
-	/* QoS Reference clock */
-	CLK_LIST(gcc_snoc_qosgen_clk),
-};
-
-static int add_dev_opp(struct clk *c, struct device *dev,
-				unsigned long max_rate)
-{
-	unsigned long rate = 0;
-	int level;
-	long ret;
-
-	while (1) {
-		ret = clk_round_rate(c, rate + 1);
-		if (ret < 0) {
-			pr_warn("round_rate failed at %lu\n", rate);
-			return ret;
-		}
-		rate = ret;
-		level = find_vdd_level(c, rate);
-		if (level <= 0) {
-			pr_warn("no uv for %lu.\n", rate);
-			return -EINVAL;
-		}
-		ret = dev_pm_opp_add(dev, rate, c->vdd_class->vdd_uv[level]);
-		if (ret) {
-			pr_warn("failed to add OPP for %lu\n", rate);
-			return ret;
-		}
-		if (rate >= max_rate)
-			break;
-	}
-	return 0;
-}
-
-static void register_opp_for_dev(struct platform_device *pdev)
-{
-	struct clk *opp_clk, *opp_clk_src;
-	unsigned long dev_fmax;
-
-	opp_clk = clk_get(&pdev->dev, "core_clk");
-	if (IS_ERR(opp_clk)) {
-		pr_err("Error getting core clk: %lu\n", PTR_ERR(opp_clk));
-		return;
-	}
-	opp_clk_src = opp_clk;
-	if (opp_clk->num_fmax <= 0) {
-		if (opp_clk->parent && opp_clk->parent->num_fmax > 0)
-			opp_clk_src = opp_clk->parent;
-		else
-			return;
-	}
-
-	dev_fmax = opp_clk_src->fmax[opp_clk_src->num_fmax - 1];
-	WARN(add_dev_opp(opp_clk_src, &pdev->dev, dev_fmax),
-		"Failed to add OPP levels for dev\n");
-}
-
-static struct clk_lookup msm_clocks_mcd[] = {
-	/* Add crypto driver clocks */
-	CLK_LOOKUP_OF("core_clk",     gcc_crypto_clk,         "mcd"),
-	CLK_LOOKUP_OF("iface_clk",    gcc_crypto_ahb_clk,     "mcd"),
-	CLK_LOOKUP_OF("bus_clk",      gcc_crypto_axi_clk,     "mcd"),
-	CLK_LOOKUP_OF("core_clk_src", crypto_clk_src,         "mcd"),
 };
 
 static int msm_gcc_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	struct clk *xo_gcc;
-	int ret, node = 0;
+	int ret;
 	u32 regval;
-	struct device_node *opp_dev_node = NULL;
-	struct platform_device *opp_dev = NULL;
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "cc_base");
 	if (!res) {
@@ -2660,30 +2577,8 @@ static int msm_gcc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	ret =  of_msm_clock_register(pdev->dev.of_node, msm_clocks_mcd,
-					ARRAY_SIZE(msm_clocks_mcd));
-	if (ret) {
-		dev_err(&pdev->dev,
-			"Failed to register crypto clocks for mcd\n");
-		return ret;
-	}
-
 	clk_set_rate(&apss_ahb_clk_src.c, 19200000);
 	clk_prepare_enable(&apss_ahb_clk_src.c);
-
-	opp_dev_node = of_parse_phandle(pdev->dev.of_node, "qcom,dev-opp-list",
-					node);
-	while (opp_dev_node) {
-		opp_dev = of_find_device_by_node(opp_dev_node);
-		if (!opp_dev) {
-			pr_err("cant find device for node\n");
-			return -EINVAL;
-		}
-		register_opp_for_dev(opp_dev);
-		node++;
-		opp_dev_node = of_parse_phandle(pdev->dev.of_node,
-					"qcom,dev-opp-list", node);
-	}
 
 	dev_info(&pdev->dev, "Registered GCC clocks\n");
 

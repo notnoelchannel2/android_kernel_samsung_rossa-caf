@@ -77,10 +77,10 @@
 #define LIS3DH_FIFO_SIZE	32
 #define LIS3DH_TIME_MS_TO_NS	1000000L
 
-#define SENSITIVITY_2G		1	/**	sensitivity scale	*/
-#define SENSITIVITY_4G		2	/**	sensitivity scale	*/
-#define SENSITIVITY_8G		4	/**	sensitivity scale	*/
-#define SENSITIVITY_16G		12	/**	sensitivity scale	*/
+#define SENSITIVITY_2G		1	/**	mg/LSB	*/
+#define SENSITIVITY_4G		2	/**	mg/LSB	*/
+#define SENSITIVITY_8G		4	/**	mg/LSB	*/
+#define SENSITIVITY_16G		12	/**	mg/LSB	*/
 
 /* Accelerometer Sensor Operating Mode */
 #define LIS3DH_ACC_ENABLE	0x01
@@ -299,7 +299,7 @@ static struct sensors_classdev lis3dh_acc_cdev = {
 	.handle = SENSORS_ACCELERATION_HANDLE,
 	.type = SENSOR_TYPE_ACCELEROMETER,
 	.max_range = "156.8",
-	.resolution = "0.000598144", /* m/s^2 */
+	.resolution = "0.01",
 	.sensor_power = "0.01",
 	.min_delay = 10000,
 	.max_delay = 6400,
@@ -1083,9 +1083,14 @@ static int lis3dh_acc_get_acceleration_data(struct lis3dh_acc_data *acc,
 	if (err < 0)
 		return err;
 
-	hw_d[0] = (((s16) ((acc_data[1] << 8) | acc_data[0])));
-	hw_d[1] = (((s16) ((acc_data[3] << 8) | acc_data[2])));
-	hw_d[2] = (((s16) ((acc_data[5] << 8) | acc_data[4])));
+	hw_d[0] = (((s16) ((acc_data[1] << 8) | acc_data[0])) >> 4);
+	hw_d[1] = (((s16) ((acc_data[3] << 8) | acc_data[2])) >> 4);
+	hw_d[2] = (((s16) ((acc_data[5] << 8) | acc_data[4])) >> 4);
+
+	hw_d[0] = hw_d[0] * acc->sensitivity;
+	hw_d[1] = hw_d[1] * acc->sensitivity;
+	hw_d[2] = hw_d[2] * acc->sensitivity;
+
 
 	xyz[0] = ((acc->pdata->negate_x) ? (-hw_d[acc->pdata->axis_map_x])
 		   : (hw_d[acc->pdata->axis_map_x]));
@@ -1093,10 +1098,6 @@ static int lis3dh_acc_get_acceleration_data(struct lis3dh_acc_data *acc,
 		   : (hw_d[acc->pdata->axis_map_y]));
 	xyz[2] = ((acc->pdata->negate_z) ? (-hw_d[acc->pdata->axis_map_z])
 		   : (hw_d[acc->pdata->axis_map_z]));
-
-	xyz[0] = xyz[0] * acc->sensitivity;
-	xyz[1] = xyz[1] * acc->sensitivity;
-	xyz[2] = xyz[2] * acc->sensitivity;
 
 	dev_dbg(&acc->client->dev, "%s read x=%d, y=%d, z=%d\n",
 				LIS3DH_ACC_DEV_NAME, xyz[0], xyz[1], xyz[2]);
@@ -1738,7 +1739,6 @@ static int lis3dh_latency_set(struct sensors_classdev *cdev,
 	struct lis3dh_acc_data *acc = container_of(cdev,
 		struct lis3dh_acc_data, cdev);
 	struct i2c_client *client = acc->client;
-	int ret;
 
 	/* Does not support batch in while interrupt is not enabled */
 	if (!acc->pdata->enable_int) {
@@ -1746,16 +1746,8 @@ static int lis3dh_latency_set(struct sensors_classdev *cdev,
 			"Cannot set batch mode, interrupt is not enabled!\n");
 		return -EPERM;
 	}
-
-	acc->fifo_timeout_ms = max_latency;
 	acc->use_batch = max_latency ? true : false;
-
-	ret = lis3dh_acc_enable_batch(acc, max_latency);
-	if (ret) {
-		dev_err(&client->dev, "enable batch:%d failed\n", max_latency);
-		return ret;
-	}
-
+	acc->fifo_timeout_ms = max_latency;
 	return 0;
 }
 
@@ -1836,7 +1828,7 @@ static int lis3dh_acc_input_init(struct lis3dh_acc_data *acc)
 
 	if (!acc->pdata->enable_int)
 		INIT_DELAYED_WORK(&acc->input_work, lis3dh_acc_input_work_func);
-	acc->input_dev = devm_input_allocate_device(&acc->client->dev);
+	acc->input_dev = input_allocate_device();
 	if (!acc->input_dev) {
 		err = -ENOMEM;
 		dev_err(&acc->client->dev, "input device allocation failed\n");
@@ -1875,13 +1867,21 @@ static int lis3dh_acc_input_init(struct lis3dh_acc_data *acc)
 		dev_err(&acc->client->dev,
 				"unable to register input device %s\n",
 				acc->input_dev->name);
-		goto err0;
+		goto err1;
 	}
 
 	return 0;
 
+err1:
+	input_free_device(acc->input_dev);
 err0:
 	return err;
+}
+
+static void lis3dh_acc_input_cleanup(struct lis3dh_acc_data *acc)
+{
+	input_unregister_device(acc->input_dev);
+	input_free_device(acc->input_dev);
 }
 
 static int lis3dh_pinctrl_init(struct lis3dh_acc_data *acc)
@@ -2164,7 +2164,7 @@ static int lis3dh_acc_probe(struct i2c_client *client,
 	if (err < 0) {
 		dev_err(&client->dev,
 		   "device LIS3DH_ACC_DEV_NAME sysfs register failed\n");
-		goto err_power_off;
+		goto err_input_cleanup;
 	}
 
 	acc->cdev = lis3dh_acc_cdev;
@@ -2235,6 +2235,8 @@ err_unreg_sensor_class:
 	sensors_classdev_unregister(&acc->cdev);
 err_remove_sysfs_int:
 	remove_sysfs_interfaces(&client->dev);
+err_input_cleanup:
+	lis3dh_acc_input_cleanup(acc);
 err_power_off:
 	lis3dh_acc_device_power_off(acc);
 err_regulator_init:
@@ -2264,6 +2266,7 @@ static int lis3dh_acc_remove(struct i2c_client *client)
 		free_irq(acc->irq2, acc);
 
 	sensors_classdev_unregister(&acc->cdev);
+	lis3dh_acc_input_cleanup(acc);
 	lis3dh_acc_config_regulator(acc, false);
 	remove_sysfs_interfaces(&client->dev);
 

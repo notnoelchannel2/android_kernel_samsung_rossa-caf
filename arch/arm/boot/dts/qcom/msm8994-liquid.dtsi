@@ -86,11 +86,6 @@
 	qcom,regulator-ldo-mode;
 };
 
-&labibb {
-	status = "ok";
-	qpnp,qpnp-labibb-mode = "lcd";
-};
-
 &pmx_hdmi_cec {
 	qcom,num-grp-pins = <1>;
 	qcom,pins = <&gp 31>;
@@ -436,6 +431,10 @@
 		};
 	};
 
+	qcom,mdss_wb_panel {
+		status = "disabled";
+	};
+
 	ts_xvdd_vreg: ts_xvdd_vreg {
 		compatible = "regulator-fixed";
 		regulator-name = "ts_xvdd_vreg";
@@ -517,6 +516,8 @@
 	liquid_dock {
 		compatible = "qcom,liquid-dock";
 		qcom,dock-detect-gpio = <&pm8994_gpios 5 0>;
+		qcom,dock-hub-reset-gpio = <&pm8994_gpios 1 0>;
+		qcom,dock-eth-reset-gpio = <&pm8994_mpps 6 0>;
 		qcom,usb-host = <&usb_ehci>;
 	};
 };
@@ -534,8 +535,7 @@
 };
 
 &pmi8994_charger {
-	qcom,dc-psy-type = "Wipower";
-	qcom,charge-unknown-battery;
+	qcom,charging-disabled;
 };
 
 &slim_msm {
@@ -592,19 +592,16 @@
 	};
 };
 
-&i2c_5 {
-	smb349-dual-charger@1b {
-		compatible = "qcom,smb349-dual-charger";
-		reg = <0x1b>;
-		interrupt-parent = <&spmi_bus>;
-		qcom,chg-stat-gpio = <&pm8994_gpios 6 0x1>;
-		qcom,fastchg-current-max-ma = <2000>;
-		qcom,battery-psy-name = "cradle-charger";
-		qcom,ext-psy-name = "battery";
-	};
-};
-
 &pm8994_gpios {
+	gpio@c000 { /* GPIO 1 HUB RESET*/
+		qcom,mode = <1>;	/* Digital output */
+		qcom,output-type = <0>;	/* CMOS logic */
+		qcom,vin-sel = <2>;	/* 1.8v */
+		qcom,src-sel = <0>;	/* Constant */
+		qcom,master-en = <1>;	/* Enable GPIO */
+		status = "okay";
+	};
+
 	gpio@c100 { /* GPIO 2 */
 		qcom,mode = <0>;
 		qcom,pull = <0>;
@@ -739,6 +736,15 @@
 		qcom,mode = <1>;	/* Digital output */
 		qcom,output-type = <0>;	/* CMOS logic */
 		qcom,vin-sel = <2>;	/* 1.8 */
+		qcom,src-sel = <0>;	/* Constant */
+		qcom,master-en = <1>;	/* Enable GPIO */
+		status = "okay";
+	};
+
+	mpp@a500 { /* MPP 6 Ethernet RESET */
+		qcom,mode = <1>;	/* Digital output */
+		qcom,output-type = <0>;	/* CMOS logic */
+		qcom,vin-sel = <2>;	/* 1.8 V */
 		qcom,src-sel = <0>;	/* Constant */
 		qcom,master-en = <1>;	/* Enable GPIO */
 		status = "okay";

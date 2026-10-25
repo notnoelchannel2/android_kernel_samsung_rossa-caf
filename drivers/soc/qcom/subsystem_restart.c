@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -38,6 +38,9 @@
 #include <soc/qcom/subsystem_notif.h>
 #include <soc/qcom/socinfo.h>
 #include <soc/qcom/sysmon.h>
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/sec_debug.h>
+#endif
 
 #include <asm/current.h>
 
@@ -153,7 +156,11 @@ struct subsys_device {
 	struct work_struct work;
 	struct wakeup_source ssr_wlock;
 	char wlname[64];
+#ifdef CONFIG_SEC_DEBUG
+	struct delayed_work device_restart_delayed_work;
+#else
 	struct work_struct device_restart_work;
+#endif
 	struct subsys_tracking track;
 
 	void *notify;
@@ -179,16 +186,6 @@ struct subsys_device {
 static struct subsys_device *to_subsys(struct device *d)
 {
 	return container_of(d, struct subsys_device, dev);
-}
-
-static struct subsys_tracking *subsys_get_track(struct subsys_device *subsys)
-{
-	struct subsys_soc_restart_order *order = subsys->restart_order;
-
-	if (order)
-		return &order->track;
-	else
-		return &subsys->track;
 }
 
 static ssize_t name_show(struct device *dev, struct device_attribute *attr,
@@ -236,64 +233,6 @@ static ssize_t restart_level_store(struct device *dev,
 	return -EPERM;
 }
 
-static ssize_t system_debug_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct subsys_device *subsys = to_subsys(dev);
-	char p[6] = "set";
-
-	if (!subsys->desc->system_debug)
-		strlcpy(p, "reset", sizeof(p));
-
-	return snprintf(buf, PAGE_SIZE, "%s\n", p);
-}
-
-static ssize_t system_debug_store(struct device *dev,
-				struct device_attribute *attr, const char *buf,
-				size_t count)
-{
-	struct subsys_device *subsys = to_subsys(dev);
-	const char *p;
-
-	p = memchr(buf, '\n', count);
-	if (p)
-		count = p - buf;
-
-	if (!strncasecmp(buf, "set", count))
-		subsys->desc->system_debug = true;
-	else if (!strncasecmp(buf, "reset", count))
-		subsys->desc->system_debug = false;
-	else
-		return -EPERM;
-	return count;
-}
-
-static ssize_t
-firmware_name_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%s\n", to_subsys(dev)->desc->fw_name);
-}
-
-static ssize_t firmware_name_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct subsys_device *subsys = to_subsys(dev);
-	struct subsys_tracking *track = subsys_get_track(subsys);
-	const char *p;
-
-	p = memchr(buf, '\n', count);
-	if (p)
-		count = p - buf;
-	if (!count)
-		return -EPERM;
-
-	pr_info("Changing subsys fw_name to %s\n", buf);
-	mutex_lock(&track->lock);
-	strlcpy(subsys->desc->fw_name, buf, count + 1);
-	mutex_unlock(&track->lock);
-	return count;
-}
-
 int subsys_get_restart_level(struct subsys_device *dev)
 {
 	return dev->restart_level;
@@ -334,8 +273,6 @@ static struct device_attribute subsys_attrs[] = {
 	__ATTR_RO(state),
 	__ATTR_RO(crash_count),
 	__ATTR(restart_level, 0644, restart_level_show, restart_level_store),
-	__ATTR(system_debug, 0644, system_debug_show, system_debug_store),
-	__ATTR(firmware_name, 0644, firmware_name_show, firmware_name_store),
 	__ATTR_NULL,
 };
 
@@ -686,7 +623,26 @@ static void subsys_stop(struct subsys_device *subsys)
 	notify_each_subsys_device(&subsys, 1, SUBSYS_AFTER_SHUTDOWN, NULL);
 }
 
-void *__subsystem_get(const char *name, const char *fw_name)
+static struct subsys_tracking *subsys_get_track(struct subsys_device *subsys)
+{
+	struct subsys_soc_restart_order *order = subsys->restart_order;
+
+	if (order)
+		return &order->track;
+	else
+		return &subsys->track;
+}
+
+/**
+ * subsytem_get() - Boot a subsystem
+ * @name: pointer to a string containing the name of the subsystem to boot
+ *
+ * This function returns a pointer if it succeeds. If an error occurs an
+ * ERR_PTR is returned.
+ *
+ * If this feature is disable, the value %NULL will be returned.
+ */
+void *subsystem_get(const char *name)
 {
 	struct subsys_device *subsys;
 	struct subsys_device *subsys_d;
@@ -714,11 +670,6 @@ void *__subsystem_get(const char *name, const char *fw_name)
 	track = subsys_get_track(subsys);
 	mutex_lock(&track->lock);
 	if (!subsys->count) {
-		if (fw_name) {
-			pr_info("Changing subsys fw_name to %s\n", fw_name);
-			strlcpy(subsys->desc->fw_name, fw_name,
-				sizeof(subsys->desc->fw_name));
-		}
 		ret = subsys_start(subsys);
 		if (ret) {
 			retval = ERR_PTR(ret);
@@ -737,37 +688,7 @@ err_module:
 	put_device(&subsys->dev);
 	return retval;
 }
-
-/**
- * subsytem_get() - Boot a subsystem
- * @name: pointer to a string containing the name of the subsystem to boot
- *
- * This function returns a pointer if it succeeds. If an error occurs an
- * ERR_PTR is returned.
- *
- * If this feature is disable, the value %NULL will be returned.
- */
-void *subsystem_get(const char *name)
-{
-	return __subsystem_get(name, NULL);
-}
 EXPORT_SYMBOL(subsystem_get);
-
-/**
- * subsystem_get_with_fwname() - Boot a subsystem using the firmware name passed in
- * @name: pointer to a string containing the name of the subsystem to boot
- * @fw_name: pointer to a string containing the subsystem firmware image name
- *
- * This function returns a pointer if it succeeds. If an error occurs an
- * ERR_PTR is returned.
- *
- * If this feature is disable, the value %NULL will be returned.
- */
-void *subsystem_get_with_fwname(const char *name, const char *fw_name)
-{
-	return __subsystem_get(name, fw_name);
-}
-EXPORT_SYMBOL(subsystem_get_with_fwname);
 
 /**
  * subsystem_put() - Shutdown a subsystem
@@ -790,9 +711,21 @@ void subsystem_put(void *subsystem)
 			subsys->desc->name, __func__))
 		goto err_out;
 	if (!--subsys->count) {
+#ifdef CONFIG_SEC_DEBUG
+		if (strncmp(subsys->desc->name, "modem", 5)) {
+			subsys_stop(subsys);
+			if (subsys->do_ramdump_on_put)
+				subsystem_ramdump(subsys, NULL);
+		}
+		else {
+			pr_err("subsys: block modem put stop for stabilty\n");
+			subsys->count++;
+		}
+#else
 		subsys_stop(subsys);
 		if (subsys->do_ramdump_on_put)
 			subsystem_ramdump(subsys, NULL);
+#endif
 	}
 	mutex_unlock(&track->lock);
 
@@ -910,9 +843,14 @@ static void __subsystem_restart_dev(struct subsys_device *dev)
 
 static void device_restart_work_hdlr(struct work_struct *work)
 {
+#ifdef CONFIG_SEC_DEBUG
+	struct subsys_device *dev = container_of(to_delayed_work(work),
+			struct subsys_device,
+			device_restart_delayed_work);
+#else
 	struct subsys_device *dev = container_of(work, struct subsys_device,
 							device_restart_work);
-
+#endif
 	notify_each_subsys_device(&dev, 1, SUBSYS_SOC_RESET, NULL);
 	panic("subsys-restart: Resetting the SoC - %s crashed.",
 							dev->desc->name);
@@ -931,6 +869,17 @@ int subsystem_restart_dev(struct subsys_device *dev)
 	}
 
 	name = dev->desc->name;
+
+#ifdef CONFIG_SEC_DEBUG
+#if 0 //def CONFIG_SEC_SSR_DEBUG_LEVEL_CHK /* Temporarily blocking until requested by cp or pl team */
+	if (!sec_debug_is_enabled_for_ssr())
+#else
+		if (!sec_debug_is_enabled())
+#endif
+			dev->restart_level = RESET_SUBSYS_COUPLED; //Why is it delete the RESET_SUBSYS_INDEPENDENT on MSM8974 ?
+		else
+			dev->restart_level = RESET_SOC;
+#endif
 
 	/*
 	 * If a system reboot/shutdown is underway, ignore subsystem errors.
@@ -958,7 +907,25 @@ int subsystem_restart_dev(struct subsys_device *dev)
 		break;
 	case RESET_SOC:
 		__pm_stay_awake(&dev->ssr_wlock);
+#ifdef CONFIG_SEC_DEBUG
+		/*
+		 * If the silent log function is enabled for CP and CP is in
+		 * trouble, diag_mdlog (APP) should be terminated before
+		 * a panic occurs, since it can flush logs to SD card
+		 * when it is over.
+		 * We should guarantee time the App needs for saving logs
+		 * as well, so we use a delayed workqueue.
+		 */
+		if(silent_log_panic_handler())
+			schedule_delayed_work(&dev->device_restart_delayed_work,
+					msecs_to_jiffies(300));
+		else
+			schedule_delayed_work(&dev->device_restart_delayed_work,
+					0);
+
+#else
 		schedule_work(&dev->device_restart_work);
+#endif
 		return 0;
 	default:
 		panic("subsys-restart: Unknown restart level!\n");
@@ -1145,8 +1112,7 @@ static int subsys_device_open(struct inode *inode, struct file *file)
 	if (!subsys_dev)
 		return -EINVAL;
 
-	retval = subsystem_get_with_fwname(subsys_dev->desc->name,
-					subsys_dev->desc->fw_name);
+	retval = subsystem_get(subsys_dev->desc->name);
 	if (IS_ERR(retval))
 		return PTR_ERR(retval);
 
@@ -1359,15 +1325,15 @@ static int __get_gpio(struct subsys_desc *desc, const char *prop,
 }
 
 static int __get_irq(struct subsys_desc *desc, const char *prop,
-		unsigned int *irq, int *gpio)
+		unsigned int *irq)
 {
-	int ret, gpiol, irql;
+	int ret, gpio, irql;
 
-	ret = __get_gpio(desc, prop, &gpiol);
+	ret = __get_gpio(desc, prop, &gpio);
 	if (ret)
 		return ret;
 
-	irql = gpio_to_irq(gpiol);
+	irql = gpio_to_irq(gpio);
 
 	if (irql == -ENOENT)
 		irql = -ENXIO;
@@ -1377,8 +1343,6 @@ static int __get_irq(struct subsys_desc *desc, const char *prop,
 				prop);
 		return irql;
 	} else {
-		if (gpio)
-			*gpio = gpiol;
 		*irq = irql;
 	}
 
@@ -1393,17 +1357,15 @@ static int subsys_parse_devicetree(struct subsys_desc *desc)
 	struct platform_device *pdev = container_of(desc->dev,
 					struct platform_device, dev);
 
-	ret = __get_irq(desc, "qcom,gpio-err-fatal", &desc->err_fatal_irq,
-							&desc->err_fatal_gpio);
+	ret = __get_irq(desc, "qcom,gpio-err-fatal", &desc->err_fatal_irq);
 	if (ret && ret != -ENOENT)
 		return ret;
 
-	ret = __get_irq(desc, "qcom,gpio-err-ready", &desc->err_ready_irq,
-							NULL);
+	ret = __get_irq(desc, "qcom,gpio-err-ready", &desc->err_ready_irq);
 	if (ret && ret != -ENOENT)
 		return ret;
 
-	ret = __get_irq(desc, "qcom,gpio-stop-ack", &desc->stop_ack_irq, NULL);
+	ret = __get_irq(desc, "qcom,gpio-stop-ack", &desc->stop_ack_irq);
 	if (ret && ret != -ENOENT)
 		return ret;
 
@@ -1520,15 +1482,18 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 	subsys->dev.release = subsys_device_release;
 	subsys->notif_state = -1;
 	subsys->desc->sysmon_pid = -1;
-	strlcpy(subsys->desc->fw_name, desc->name,
-			sizeof(subsys->desc->fw_name));
 
 	subsys->notify = subsys_notif_add_subsys(desc->name);
 
 	snprintf(subsys->wlname, sizeof(subsys->wlname), "ssr(%s)", desc->name);
 	wakeup_source_init(&subsys->ssr_wlock, subsys->wlname);
 	INIT_WORK(&subsys->work, subsystem_restart_wq_func);
+#ifdef CONFIG_SEC_DEBUG
+		INIT_DELAYED_WORK(&subsys->device_restart_delayed_work,
+								device_restart_work_hdlr);
+#else
 	INIT_WORK(&subsys->device_restart_work, device_restart_work_hdlr);
+#endif
 	spin_lock_init(&subsys->track.s_lock);
 
 	subsys->id = ida_simple_get(&subsys_ida, 0, 0, GFP_KERNEL);

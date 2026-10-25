@@ -695,6 +695,15 @@ static int soc_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 		if (ret < 0)
 			return ret;
 	}
+
+#ifdef CONFIG_AUDIO_SPEAKER_OUT_MAXIM_AMP_ENABLE
+	if (rtd->dai_link->ops && rtd->dai_link->ops->trigger) {
+		ret = rtd->dai_link->ops->trigger(substream, cmd);
+		if (ret < 0) {
+			return ret;
+		}
+	}
+#endif /* CONFIG_AUDIO_SPEAKER_OUT_MAXIM_AMP_ENABLE */
 	return 0;
 }
 
@@ -1845,6 +1854,10 @@ void dpcm_be_dai_prepare_async(struct snd_soc_pcm_runtime *fe, int stream,
 							    dpcm, domain);
 		} else {
 			dpcm_async[i++] = dpcm;
+			if (i == DPCM_MAX_BE_USERS) {
+				dev_dbg(fe->dev, "ASoC: MAX backend users!\n");
+				break;
+			}
 		}
 	}
 

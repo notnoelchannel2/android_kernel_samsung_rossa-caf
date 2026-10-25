@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +26,7 @@
 
 #include "u_bam_data.h"
 
+#define BAM2BAM_DATA_N_PORTS	1
 #define BAM_DATA_RX_Q_SIZE	128
 #define BAM_DATA_MUX_RX_REQ_SIZE  2048   /* Must be 1KB aligned */
 #define BAM_DATA_PENDING_LIMIT	220
@@ -594,20 +595,14 @@ static void bam_data_endless_tx_complete(struct usb_ep *ep,
 static void bam_data_start_endless_rx(struct bam_data_port *port)
 {
 	struct bam_data_ch_info *d = &port->data_ch;
-	struct usb_ep *ep;
-	unsigned long flags;
 	int status;
 
-	spin_lock_irqsave(&port->port_lock, flags);
 	if (!port->port_usb) {
-		spin_unlock_irqrestore(&port->port_lock, flags);
 		return;
 	}
-	ep = port->port_usb->out;
-	spin_unlock_irqrestore(&port->port_lock, flags);
 
 	pr_debug("%s: enqueue\n", __func__);
-	status = usb_ep_queue(ep, d->rx_req, GFP_ATOMIC);
+	status = usb_ep_queue(port->port_usb->out, d->rx_req, GFP_ATOMIC);
 	if (status)
 		pr_err("error enqueuing transfer, %d\n", status);
 }
@@ -615,20 +610,13 @@ static void bam_data_start_endless_rx(struct bam_data_port *port)
 static void bam_data_start_endless_tx(struct bam_data_port *port)
 {
 	struct bam_data_ch_info *d = &port->data_ch;
-	struct usb_ep *ep;
-	unsigned long flags;
 	int status;
 
-	spin_lock_irqsave(&port->port_lock, flags);
-	if (!port->port_usb) {
-		spin_unlock_irqrestore(&port->port_lock, flags);
+	if (!port->port_usb)
 		return;
-	}
-	ep = port->port_usb->in;
-	spin_unlock_irqrestore(&port->port_lock, flags);
 
 	pr_debug("%s: enqueue\n", __func__);
-	status = usb_ep_queue(ep, d->tx_req, GFP_ATOMIC);
+	status = usb_ep_queue(port->port_usb->in, d->tx_req, GFP_ATOMIC);
 	if (status)
 		pr_err("error enqueuing transfer, %d\n", status);
 }
@@ -636,12 +624,11 @@ static void bam_data_start_endless_tx(struct bam_data_port *port)
 static void bam_data_stop_endless_rx(struct bam_data_port *port)
 {
 	struct bam_data_ch_info *d = &port->data_ch;
-	unsigned long flags;
 	int status;
 
-	spin_lock_irqsave(&port->port_lock, flags);
+	spin_lock(&port->port_lock);
 	if (!port->port_usb) {
-		spin_unlock_irqrestore(&port->port_lock, flags);
+		spin_unlock(&port->port_lock);
 		return;
 	}
 
@@ -650,25 +637,18 @@ static void bam_data_stop_endless_rx(struct bam_data_port *port)
 	if (status)
 		pr_err("%s: error dequeuing transfer, %d\n", __func__, status);
 
-	spin_unlock_irqrestore(&port->port_lock, flags);
+	spin_unlock(&port->port_lock);
 }
 static void bam_data_stop_endless_tx(struct bam_data_port *port)
 {
 	struct bam_data_ch_info *d = &port->data_ch;
-	struct usb_ep *ep;
-	unsigned long flags;
 	int status;
 
-	spin_lock_irqsave(&port->port_lock, flags);
-	if (!port->port_usb) {
-		spin_unlock_irqrestore(&port->port_lock, flags);
+	if (!port->port_usb)
 		return;
-	}
-	ep = port->port_usb->in;
-	spin_unlock_irqrestore(&port->port_lock, flags);
 
 	pr_debug("%s: dequeue\n", __func__);
-	status = usb_ep_dequeue(ep, d->tx_req);
+	status = usb_ep_dequeue(port->port_usb->in, d->tx_req);
 	if (status)
 		pr_err("%s: error dequeuing transfer, %d\n", __func__, status);
 }
@@ -748,45 +728,6 @@ static void bam2bam_free_rx_skb_idle_list(struct bam_data_port *port)
 							d->freed_skb);
 }
 
-/*
- * bam_data_ipa_disconnect()- Perform USB IPA function level disconnect
- * struct bam_data_ch_info - Per USB IPA port data structure
- *
- * Make sure to call IPA rndis/ecm/mbim related disconnect APIs() only
- * if those APIs init counterpart is already performed.
- * MBIM: teth_bridge_connect() is NO_OPS and teth_bridge_init() is
- * being called with atomic context on cable connect, hence there is no
- * need to consider for this check. is_net_interface_up is being used
- * for RNDIS/ECM driver due to its different design with usage of
- * network interface created by IPA driver.
- */
-static void bam_data_ipa_disconnect(struct bam_data_ch_info *d)
-{
-	pr_debug("%s(): is_net_interface_up:%d\n",
-		__func__, atomic_read(&d->is_net_interface_up));
-	/*
-	 * Check if is_net_interface_up is set to 1, then perform disconnect
-	 * part and set is_net_interface_up to zero.
-	 */
-	if (atomic_xchg(&d->is_net_interface_up, 0) == 1) {
-		void *priv;
-		if (d->func_type == USB_FUNC_ECM) {
-			priv = ecm_qc_get_ipa_priv();
-			ecm_ipa_disconnect(priv);
-		} else if (d->func_type == USB_FUNC_RNDIS) {
-			priv = rndis_qc_get_ipa_priv();
-			rndis_ipa_pipe_disconnect_notify(priv);
-			is_ipa_rndis_net_on = false;
-		}
-		pr_debug("%s(): net interface is disconnected.\n", __func__);
-	}
-
-	if (d->func_type == USB_FUNC_MBIM) {
-		pr_debug("%s(): teth_bridge() disconnected\n", __func__);
-		teth_bridge_disconnect(d->ipa_params.src_client);
-	}
-}
-
 static void bam2bam_data_disconnect_work(struct work_struct *w)
 {
 	struct bam_data_port *port =
@@ -808,7 +749,6 @@ static void bam2bam_data_disconnect_work(struct work_struct *w)
 	 * even if there gonna be errors down in this function.
 	 */
 	port->is_connected = false;
-	d = &port->data_ch;
 
 	/*
 	 * Unlock the port here and not at the end of this work,
@@ -820,9 +760,8 @@ static void bam2bam_data_disconnect_work(struct work_struct *w)
 	*/
 	spin_unlock_irqrestore(&port->port_lock, flags);
 
+	d = &port->data_ch;
 	if (d->trans == USB_GADGET_XPORT_BAM2BAM_IPA) {
-		/* Perform IPA functions' disconnect */
-		bam_data_ipa_disconnect(d);
 		ret = usb_bam_disconnect_ipa(&d->ipa_params);
 		if (ret)
 			pr_err("usb_bam_disconnect_ipa failed: err:%d\n", ret);
@@ -855,15 +794,18 @@ static void configure_usb_data_fifo(u8 idx, struct usb_ep *ep,
 }
 
 /* Start RX transfers according to pipe_type */
-static inline void bam_data_start_rx_transfers(struct bam_data_ch_info *d,
+static inline int bam_data_start_rx_transfers(struct bam_data_ch_info *d,
 				struct bam_data_port *port)
 {
+
 	if (d->trans == USB_GADGET_XPORT_BAM2BAM ||
 		d->src_pipe_type == USB_BAM_PIPE_BAM2BAM) {
 		bam_data_start_endless_rx(port);
 	} else {
 		bam_data_start_rx(port);
 	}
+
+	return 0;
 }
 
 static void bam2bam_data_connect_work(struct work_struct *w)
@@ -1314,28 +1256,18 @@ void bam_data_start_rx_tx(u8 port_num)
 		goto out;
 	}
 
-	spin_unlock_irqrestore(&port->port_lock, flags);
-
 	/* queue in & out requests */
 	pr_debug("%s: Starting rx", __func__);
-	bam_data_start_rx_transfers(d, port);
+	spin_unlock_irqrestore(&port->port_lock, flags);
+	if (bam_data_start_rx_transfers(d, port))
+		goto out;
+	spin_lock_irqsave(&port->port_lock, flags);
 
 	pr_debug("%s: Starting tx", __func__);
 	bam_data_start_endless_tx(port);
 
-	return;
 out:
 	spin_unlock_irqrestore(&port->port_lock, flags);
-}
-
-inline int u_bam_data_func_to_port(enum function_type func, u8 func_port)
-{
-	if (func >= USB_NUM_FUNCS || func_port >= PORTS_PER_FUNC) {
-		pr_err("func=%d and func_port=%d are an illegal combination\n",
-			func, func_port);
-		return -EINVAL;
-	}
-	return (PORTS_PER_FUNC * func) + func_port;
 }
 
 static int bam2bam_data_port_alloc(int portno)
@@ -1402,9 +1334,8 @@ void u_bam_data_start_rndis_ipa(void)
 	pr_debug("%s\n", __func__);
 
 	if (!is_ipa_rndis_net_on) {
-		int port_num = u_bam_data_func_to_port(USB_FUNC_RNDIS,
-							RNDIS_QC_ACTIVE_PORT);
-		struct bam_data_port *port = bam2bam_data_ports[port_num];
+		struct bam_data_port *port =
+			bam2bam_data_ports[RNDIS_QC_ACTIVE_PORT];
 
 		if (port->rndis_s == RNDIS_SOFT_DISABLE)
 			port->rndis_s = RNDIS_SOFT_ENABLE;
@@ -1419,15 +1350,15 @@ void u_bam_data_stop_rndis_ipa(void)
 	pr_debug("%s\n", __func__);
 
 	if (is_ipa_rndis_net_on) {
-		int port_num = u_bam_data_func_to_port(USB_FUNC_RNDIS,
-							RNDIS_QC_ACTIVE_PORT);
-		struct bam_data_port *port = bam2bam_data_ports[port_num];
+		struct bam_data_port *port =
+			bam2bam_data_ports[RNDIS_QC_ACTIVE_PORT];
 
 		rndis_ipa_reset_trigger();
 		bam_data_stop_endless_tx(port);
 		port->rndis_s = RNDIS_SOFT_DISABLE;
 		rndis_data.adaptor_disable = true;
-		bam_data_disconnect(port->port_usb, port_num);
+		bam_data_disconnect(port->port_usb,
+					RNDIS_QC_ACTIVE_PORT);
 	}
 }
 
@@ -1574,7 +1505,39 @@ void bam_data_disconnect(struct data_port *gr, u8 port_num)
 		}
 	}
 
+	/*
+	 * Make sure to call IPA rndis/ecm/mbim related disconnect APIs() only
+	 * if those APIs init counterpart is already performed.
+	 * MBIM: teth_bridge_connect() is NO_OPS and teth_bridge_init() is
+	 * being called with atomic context on cable connect, hence there is no
+	 * need to consider for this check. is_net_interface_up is being used
+	 * for RNDIS/ECM driver due to its different design with usage of
+	 * network interface created by IPA driver.
+	 */
 	if (d->trans == USB_GADGET_XPORT_BAM2BAM_IPA) {
+		pr_debug("%s(): is_net_interface_up:%d\n",
+			__func__, atomic_read(&d->is_net_interface_up));
+		if (atomic_read(&d->is_net_interface_up)) {
+			void *priv;
+
+			if (d->func_type == USB_FUNC_ECM) {
+				priv = ecm_qc_get_ipa_priv();
+				ecm_ipa_disconnect(priv);
+			} else if (d->func_type == USB_FUNC_RNDIS) {
+				priv = rndis_qc_get_ipa_priv();
+				rndis_ipa_pipe_disconnect_notify(priv);
+				is_ipa_rndis_net_on = false;
+			}
+			pr_debug("%s(): net interface is disconnected.\n",
+								__func__);
+			atomic_set(&d->is_net_interface_up, 0);
+		}
+
+		if (d->func_type == USB_FUNC_MBIM) {
+			pr_debug("%s(): teth_bridge() disconnected\n",
+								__func__);
+			teth_bridge_disconnect(d->ipa_params.src_client);
+		}
 		port->last_event = U_BAM_DATA_DISCONNECT_E;
 		queue_work(bam_data_wq, &port->disconnect_w);
 	} else {
@@ -1708,23 +1671,21 @@ exit:
 	return ret;
 }
 
-int bam_data_setup(enum function_type func, unsigned int no_bam2bam_port)
+int bam_data_setup(unsigned int no_bam2bam_port)
 {
 	int	i;
 	int	ret;
 
 	pr_debug("requested %d BAM2BAM ports", no_bam2bam_port);
 
-	if (!no_bam2bam_port || no_bam2bam_port > PORTS_PER_FUNC ||
-		func >= USB_NUM_FUNCS) {
-		pr_err("Invalid num of ports count:%d or function type:%d\n",
-			no_bam2bam_port, func);
+	if (!no_bam2bam_port || no_bam2bam_port > BAM2BAM_DATA_N_PORTS) {
+		pr_err("Invalid num of ports count:%d\n", no_bam2bam_port);
 		return -EINVAL;
 	}
 
 	for (i = 0; i < no_bam2bam_port; i++) {
 		n_bam2bam_data_ports++;
-		ret = bam2bam_data_port_alloc(u_bam_data_func_to_port(func, i));
+		ret = bam2bam_data_port_alloc(i);
 		if (ret) {
 			n_bam2bam_data_ports--;
 			pr_err("Failed to alloc port:%d\n", i);
@@ -1799,17 +1760,28 @@ static int bam_data_wake_cb(void *param)
 	 * allowed to do so by the host. This is done in order to support non
 	 * fully USB 3.0 compatible hosts.
 	 */
-	if ((gadget->speed == USB_SPEED_SUPER) && (func->func_is_suspended))
-		ret = usb_func_wakeup(func);
-	else
+	if ((gadget->speed == USB_SPEED_SUPER) && (func->func_is_suspended)) {
+		if (!func->func_wakeup_allowed)
+			return -ENOTSUPP;
+		else {
+			ret = usb_func_wakeup(func);
+			if (ret)
+				pr_err("Function wakeup failed. ret=%d\n", ret);
+		}
+	} else {
 		ret = usb_gadget_wakeup(gadget);
+		if (ret) {
+			if ((ret == -EBUSY) || (ret == -EAGAIN))
+				pr_debug("Remote wakeup is delayed due to low-power mode exit.\n");
+			else
+				pr_err("Failed to wake up the USB core. ret=%d.\n",
+					ret);
 
-	if ((ret == -EBUSY) || (ret == -EAGAIN))
-		pr_debug("Remote wakeup is delayed due to LPM exit.\n");
-	else if (ret)
-		pr_err("Failed to wake up the USB core. ret=%d.\n", ret);
+			return ret;
+		}
+	}
 
-	return ret;
+	return 0;
 }
 
 static void bam_data_start(void *param, enum usb_bam_pipe_dir dir)
@@ -2008,9 +1980,7 @@ static void bam2bam_data_resume_work(struct work_struct *w)
 				configure_usb_data_fifo(d->dst_bam_idx,
 					port->port_usb->in,
 					d->dst_pipe_type);
-				spin_unlock_irqrestore(&port->port_lock, flags);
 				msm_dwc3_reset_dbm_ep(port->port_usb->in);
-				spin_lock_irqsave(&port->port_lock, flags);
 		}
 		usb_bam_resume(&d->ipa_params);
 	}

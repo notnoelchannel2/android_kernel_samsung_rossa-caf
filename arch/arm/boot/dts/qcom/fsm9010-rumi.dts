@@ -21,8 +21,15 @@
 };
 
 &soc {
-	blsp1_uart2: serial@f991f000 {
+	serial@f991f000 {
 		status = "ok";
+	};
+
+	dummy_vreg: dummy_vreg {
+		compatible = "regulator-fixed";
+		status = "ok";
+		regulator-name = "dummy_vreg";
+		regulator-always-on;
 	};
 
 	qcom,qfpfuse@fc4b8000 {
@@ -37,9 +44,59 @@
 	pcie1: qcom,pcie@fc528000 {
 		status = "disabled";
 	};
+
+	gdsc_pcie_0:gdsc_pcie_0 {
+		compatible = "qcom,stub-regulator";
+		regulator-name = "gdsc_pcie_0";
+		status = "ok";
+	};
+
+	gdsc_pcie_1:gdsc_pcie_1 {
+		compatible = "qcom,stub-regulator";
+		regulator-name = "gdsc_pcie_1";
+		status = "ok";
+	};
 };
 
 &sdhc_1 {
+	vdd-supply = <&dummy_vreg>;
+	qcom,vdd-voltage-level = <2950000 2950000>;
+	qcom,vdd-current-level = <200 500000>;
+
+	vdd-io-supply = <&dummy_vreg>;
+	qcom,vdd-io-always-on;
+	qcom,vdd-io-voltage-level = <1800000 1800000>;
+	qcom,vdd-io-current-level = <200 154000>;
+
+	qcom,clk-rates = <400000>;
+	qcom,bus-speed-mode = "";
+	qcom,nonremovable;
+
 	status = "ok";
 };
 
+/* Stub Regulator */
+/ {
+	/* PCIE1/2_0P9_VDDA; */
+	summit_l3: summit_l3 {
+		compatible = "qcom,stub-regulator";
+		regulator-name = "summit_l3";
+		regulator-min-microvolt = <950000>;
+		regulator-max-microvolt = <950000>;
+		qcom,enable-time = <200>;
+		qcom,pull-down-enable = <1>;
+		status = "okay";
+	};
+
+	/* pcie LDO12 */
+	summit_l12: summit_l12 {
+		compatible = "qcom,stub-regulator";
+		regulator-name = "summit_l12";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		qcom,enable-time = <500>;
+		qcom,pull-down-enable = <1>;
+		regulator-always-on;
+		status = "okay";
+	};
+};

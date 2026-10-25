@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, 2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,6 +23,7 @@
 #endif
 
 #define VIDC_DBG_TAG VIDC_DBG_LABEL ": %4s: "
+#define VIDC_DBG_WARN_ENABLE (msm_vidc_debug & VIDC_INFO)
 
 /* To enable messages OR these values and
  * echo the result to debugfs file.
@@ -60,11 +61,9 @@ extern int msm_fw_low_power_mode;
 extern int msm_vidc_hw_rsp_timeout;
 extern u32 msm_fw_coverage;
 extern int msm_vidc_vpe_csc_601_to_709;
-extern int msm_vidc_dec_dcvs_mode;
-extern int msm_vidc_enc_dcvs_mode;
+extern int msm_vidc_dcvs_mode;
 extern int msm_vidc_sys_idle_indicator;
 extern u32 msm_vidc_firmware_unload_delay;
-extern int msm_vidc_thermal_mitigation_disabled;
 
 #define VIDC_MSG_PRIO2STRING(__level) ({ \
 	char *__str; \
@@ -159,10 +158,12 @@ static inline void show_stats(struct msm_vidc_inst *i)
 	for (x = 0; x < MAX_PROFILING_POINTS; x++) {
 		if ((i->debug.pdata[x].name[0])  &&
 			(msm_vidc_debug & VIDC_PROF)) {
-			dprintk(VIDC_PROF, "%s averaged %d ms/sample\n",
-				i->debug.pdata[x].name,
-				i->debug.pdata[x].cumulative /
+			if (i->debug.samples) {
+				dprintk(VIDC_PROF, "%s averaged %d ms/sample\n",
+					i->debug.pdata[x].name,
+					i->debug.pdata[x].cumulative /
 					i->debug.samples);
+			}
 			dprintk(VIDC_PROF, "%s Samples: %d\n",
 					i->debug.pdata[x].name,
 					i->debug.samples);

@@ -281,8 +281,7 @@ void delayed_release_work_func(struct work_struct *work)
 	}
 
 	ipa_rm_resource_consumer_release(
-		(struct ipa_rm_resource_cons *)resource, rwork->needed_bw,
-		rwork->dec_usage_count);
+		(struct ipa_rm_resource_cons *)resource, rwork->needed_bw);
 
 bail:
 	spin_unlock_irqrestore(&ipa_rm_ctx->ipa_rm_lock, flags);
@@ -318,7 +317,7 @@ int ipa_rm_request_resource_with_timer(enum ipa_rm_resource_name resource_name)
 		goto bail;
 	}
 	result = ipa_rm_resource_consumer_request(
-			(struct ipa_rm_resource_cons *)resource, 0, false);
+			(struct ipa_rm_resource_cons *)resource, 0);
 	if (result != 0 && result != -EINPROGRESS) {
 		IPA_RM_ERR("consumer request returned error %d\n", result);
 		result = -EPERM;
@@ -332,7 +331,6 @@ int ipa_rm_request_resource_with_timer(enum ipa_rm_resource_name resource_name)
 	}
 	release_work->resource_name = resource->name;
 	release_work->needed_bw = 0;
-	release_work->dec_usage_count = false;
 	INIT_DELAYED_WORK(&release_work->work, delayed_release_work_func);
 	schedule_delayed_work(&release_work->work,
 			msecs_to_jiffies(IPA_RM_RELEASE_DELAY_IN_MSEC));

@@ -25,6 +25,8 @@
 #include <soc/qcom/scm.h>
 #include <soc/qcom/qseecomi.h>
 
+#define DEBUG_MAX_RW_BUF 4096
+
 /* QSEE_LOG_BUF_SIZE = 32K */
 #define QSEE_LOG_BUF_SIZE 0x8000
 
@@ -34,7 +36,7 @@
 /*
  * Preprocessor Definitions and Constants
  */
-#define TZBSP_MAX_CPU_COUNT 0x08
+#define TZBSP_CPU_COUNT 0x02
 /*
  * Number of VMID Tables
  */
@@ -103,7 +105,7 @@ struct tzdbg_int_t {
 	 * Any additional characters are truncated.
 	 */
 	uint8_t int_desc[TZBSP_MAX_INT_DESC];
-	uint64_t int_count[TZBSP_MAX_CPU_COUNT]; /* # of times seen per CPU */
+	uint64_t int_count[TZBSP_CPU_COUNT]; /* # of times seen per CPU */
 };
 
 /*
@@ -125,9 +127,6 @@ struct tzdbg_log_t {
 
 /*
  * Diagnostic Table
- * Note: This is the reference data structure for tz diagnostic table
- * supporting TZBSP_MAX_CPU_COUNT, the real diagnostic data is directly
- * copied into buffer from i/o memory.
  */
 struct tzdbg_t {
 	uint32_t magic_num;
@@ -167,11 +166,11 @@ struct tzdbg_t {
 	/*
 	 * Boot Info
 	 */
-	struct tzdbg_boot_info_t  boot_info[TZBSP_MAX_CPU_COUNT];
+	struct tzdbg_boot_info_t  boot_info[TZBSP_CPU_COUNT];
 	/*
 	 * Reset Info
 	 */
-	struct tzdbg_reset_info_t reset_info[TZBSP_MAX_CPU_COUNT];
+	struct tzdbg_reset_info_t reset_info[TZBSP_CPU_COUNT];
 	uint32_t num_interrupts;
 	struct tzdbg_int_t  int_info[TZBSP_DIAG_INT_NUM];
 	/*
@@ -219,7 +218,6 @@ static struct tzdbg tzdbg = {
 };
 
 static struct tzdbg_log_t *g_qsee_log;
-static uint32_t debug_rw_buf_size;
 
 /*
  * Debugfs data structure and functions
@@ -229,7 +227,7 @@ static int _disp_tz_general_stats(void)
 {
 	int len = 0;
 
-	len += snprintf(tzdbg.disp_buf + len, debug_rw_buf_size - 1,
+	len += snprintf(tzdbg.disp_buf + len, DEBUG_MAX_RW_BUF - 1,
 			"   Version        : 0x%x\n"
 			"   Magic Number   : 0x%x\n"
 			"   Number of CPU  : %d\n",
@@ -255,11 +253,11 @@ static int _disp_tz_vmid_stats(void)
 	for (i = 0; i < num_vmid; i++) {
 		if (ptr->vmid < 0xFF) {
 			len += snprintf(tzdbg.disp_buf + len,
-				(debug_rw_buf_size - 1) - len,
+				(DEBUG_MAX_RW_BUF - 1) - len,
 				"   0x%x        %s\n",
 				(uint32_t)ptr->vmid, (uint8_t *)ptr->desc);
 		}
-		if (len > (debug_rw_buf_size - 1)) {
+		if (len > (DEBUG_MAX_RW_BUF - 1)) {
 			pr_warn("%s: Cannot fit all info into the buffer\n",
 								__func__);
 			break;
@@ -282,7 +280,7 @@ static int _disp_tz_boot_stats(void)
 
 	for (i = 0; i < tzdbg.diag_buf->cpu_count; i++) {
 		len += snprintf(tzdbg.disp_buf + len,
-				(debug_rw_buf_size - 1) - len,
+				(DEBUG_MAX_RW_BUF - 1) - len,
 				"  CPU #: %d\n"
 				"     Warmboot jump address     : 0x%x\n"
 				"     Warmboot entry CPU counter: 0x%x\n"
@@ -293,7 +291,7 @@ static int _disp_tz_boot_stats(void)
 				ptr->wb_exit_cnt, ptr->pc_entry_cnt,
 				ptr->pc_exit_cnt);
 
-		if (len > (debug_rw_buf_size - 1)) {
+		if (len > (DEBUG_MAX_RW_BUF - 1)) {
 			pr_warn("%s: Cannot fit all info into the buffer\n",
 								__func__);
 			break;
@@ -315,13 +313,13 @@ static int _disp_tz_reset_stats(void)
 
 	for (i = 0; i < tzdbg.diag_buf->cpu_count; i++) {
 		len += snprintf(tzdbg.disp_buf + len,
-				(debug_rw_buf_size - 1) - len,
+				(DEBUG_MAX_RW_BUF - 1) - len,
 				"  CPU #: %d\n"
 				"     Reset Type (reason)       : 0x%x\n"
 				"     Reset counter             : 0x%x\n",
 				i, ptr->reset_type, ptr->reset_cnt);
 
-		if (len > (debug_rw_buf_size - 1)) {
+		if (len > (DEBUG_MAX_RW_BUF - 1)) {
 			pr_warn("%s: Cannot fit all info into the buffer\n",
 								__func__);
 			break;
@@ -351,7 +349,7 @@ static int _disp_tz_interrupt_stats(void)
 	for (i = 0; i < (*num_int); i++) {
 		tzdbg_ptr = (struct tzdbg_int_t *)ptr;
 		len += snprintf(tzdbg.disp_buf + len,
-				(debug_rw_buf_size - 1) - len,
+				(DEBUG_MAX_RW_BUF - 1) - len,
 				"     Interrupt Number          : 0x%x\n"
 				"     Type of Interrupt         : 0x%x\n"
 				"     Description of interrupt  : %s\n",
@@ -360,15 +358,15 @@ static int _disp_tz_interrupt_stats(void)
 				(uint8_t *)tzdbg_ptr->int_desc);
 		for (j = 0; j < tzdbg.diag_buf->cpu_count; j++) {
 			len += snprintf(tzdbg.disp_buf + len,
-				(debug_rw_buf_size - 1) - len,
+				(DEBUG_MAX_RW_BUF - 1) - len,
 				"     int_count on CPU # %d      : %u\n",
 				(uint32_t)j,
 				(uint32_t)tzdbg_ptr->int_count[j]);
 		}
-		len += snprintf(tzdbg.disp_buf + len, debug_rw_buf_size - 1,
+		len += snprintf(tzdbg.disp_buf + len, DEBUG_MAX_RW_BUF - 1,
 									"\n");
 
-		if (len > (debug_rw_buf_size - 1)) {
+		if (len > (DEBUG_MAX_RW_BUF - 1)) {
 			pr_warn("%s: Cannot fit all info into the buffer\n",
 								__func__);
 			break;
@@ -387,7 +385,7 @@ static int _disp_tz_log_stats_legacy(void)
 
 	ptr = (unsigned char *)tzdbg.diag_buf +
 					tzdbg.diag_buf->ring_off;
-	len += snprintf(tzdbg.disp_buf, (debug_rw_buf_size - 1) - len,
+	len += snprintf(tzdbg.disp_buf, (DEBUG_MAX_RW_BUF - 1) - len,
 							"%s\n", ptr);
 
 	tzdbg.stat[TZDBG_LOG].data = tzdbg.disp_buf;
@@ -404,6 +402,7 @@ static int _disp_log_stats(struct tzdbg_log_t *log,
 	int max_len;
 	int len = 0;
 	int i = 0;
+	int retry = 2;
 
 	wrap_start = log_start->wrap;
 	wrap_end = log->log_pos.wrap;
@@ -438,13 +437,17 @@ static int _disp_log_stats(struct tzdbg_log_t *log,
 			return 0;
 		}
 
+		retry--;
+		if (!retry)
+			return 0;
+
 		if (buf_idx == TZDBG_LOG)
 			memcpy_fromio((void *)tzdbg.diag_buf, tzdbg.virt_iobase,
-						debug_rw_buf_size);
+						DEBUG_MAX_RW_BUF);
 
 	}
 
-	max_len = (count > debug_rw_buf_size) ? debug_rw_buf_size : count;
+	max_len = (count > DEBUG_MAX_RW_BUF) ? DEBUG_MAX_RW_BUF : count;
 
 	/*
 	 *  Read from ring buff while there is data and space in return buff
@@ -492,7 +495,7 @@ static ssize_t tzdbgfs_read(struct file *file, char __user *buf,
 	int *tz_id =  file->private_data;
 
 	memcpy_fromio((void *)tzdbg.diag_buf, tzdbg.virt_iobase,
-						debug_rw_buf_size);
+						DEBUG_MAX_RW_BUF);
 	switch (*tz_id) {
 	case TZDBG_BOOT:
 		len = _disp_tz_boot_stats();
@@ -658,7 +661,7 @@ static int  tzdbgfs_init(struct platform_device *pdev)
 			goto err;
 		}
 	}
-	tzdbg.disp_buf = kzalloc(debug_rw_buf_size, GFP_KERNEL);
+	tzdbg.disp_buf = kzalloc(DEBUG_MAX_RW_BUF, GFP_KERNEL);
 	if (tzdbg.disp_buf == NULL) {
 		pr_err("%s: Can't Allocate memory for tzdbg.disp_buf\n",
 			__func__);
@@ -700,7 +703,8 @@ static int tz_log_probe(struct platform_device *pdev)
 	uint32_t *ptr = NULL;
 
 	/*
-	 * Get address that stores the physical location diagnostic data
+	 * Get address that stores the physical location of 4KB
+	 * diagnostic data
 	 */
 	resource = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!resource) {
@@ -708,44 +712,39 @@ static int tz_log_probe(struct platform_device *pdev)
 				"%s: ERROR Missing MEM resource\n", __func__);
 		return -ENXIO;
 	};
-
 	/*
-	 * Get the debug buffer size
-	 */
-	debug_rw_buf_size = resource->end - resource->start + 1;
-
-	/*
-	 * Map address that stores the physical location diagnostic data
+	 * Map address that stores the physical location of 4KB
+	 * diagnostic data
 	 */
 	virt_iobase = devm_ioremap_nocache(&pdev->dev, resource->start,
-				debug_rw_buf_size);
+				resource->end - resource->start + 1);
 	if (!virt_iobase) {
 		dev_err(&pdev->dev,
 			"%s: ERROR could not ioremap: start=%pr, len=%u\n",
 			__func__, &resource->start,
-			(unsigned int)(debug_rw_buf_size));
+			(unsigned int)(resource->end - resource->start + 1));
 		return -ENXIO;
 	}
 	/*
-	 * Retrieve the address of diagnostic data
+	 * Retrieve the address of 4KB diagnostic data
 	 */
 	tzdiag_phy_iobase = readl_relaxed(virt_iobase);
 
 	/*
-	 * Map the diagnostic information area
+	 * Map the 4KB diagnostic information area
 	 */
 	tzdbg.virt_iobase = devm_ioremap_nocache(&pdev->dev,
-				tzdiag_phy_iobase, debug_rw_buf_size);
+				tzdiag_phy_iobase, DEBUG_MAX_RW_BUF);
 
 	if (!tzdbg.virt_iobase) {
 		dev_err(&pdev->dev,
 			"%s: ERROR could not ioremap: start=%pr, len=%u\n",
 			__func__, &tzdiag_phy_iobase,
-			debug_rw_buf_size);
+			DEBUG_MAX_RW_BUF);
 		return -ENXIO;
 	}
 
-	ptr = kzalloc(debug_rw_buf_size, GFP_KERNEL);
+	ptr = kzalloc(DEBUG_MAX_RW_BUF, GFP_KERNEL);
 	if (ptr == NULL) {
 		pr_err("%s: Can't Allocate memory: ptr\n",
 			__func__);

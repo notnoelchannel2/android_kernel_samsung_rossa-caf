@@ -16,13 +16,6 @@
 / {
 	model = "Qualcomm Technologies, Inc. FSM9900";
 	compatible = "qcom,fsm9900";
-	qcom,msm-id = <188 0x10000>,
-		      <189 0x10000>,
-		      <190 0x10000>,
-		      <191 0x10000>,
-		      <192 0x10000>,
-		      <193 0x10000>,
-		      <276 0x10000>;
 	interrupt-parent = <&intc>;
 
 	aliases {
@@ -202,7 +195,7 @@
 
 	qcom,smem@1c100000 {
 		compatible = "qcom,smem";
-		reg = <0x1c100000 0x700000>,
+		reg = <0x1c100000 0x300000>,
 			<0xf9011000 0x1000>;
 		reg-names = "smem", "irq-reg-base";
 
@@ -497,7 +490,7 @@
 
 	qcom,nl_debug_sharedmem@1a100000 {
 		compatible = "qcom,sharedmem-uio";
-		reg = <0x1a100000 0x02000000>;
+		reg = <0x1a100000 0x01000000>;
 		reg-names = "nl_debug";
 		qcom,client-id = <0x00000001>;
 	};
@@ -1370,7 +1363,7 @@
 	};
 
 	qcom,rfic@fd4a4090 {
-		compatible = "qcom,rfic-fsm9900";
+		compatible = "qcom,rfic";
 		reg = <0xfd4a4090 0x40>,
 			<0x3a000000 0xa00000>,
 			<0xf9b10000 0x8000>;
@@ -1390,7 +1383,7 @@
 		qcom,controller-type = "geni-ssbi-arbiter";
 
 		rfic@1 {
-			compatible = "qcom,rfic-fsm9900";
+			compatible = "qcom,rfic";
 		};
 	};
 
@@ -1401,7 +1394,7 @@
 		qcom,controller-type = "geni-ssbi-arbiter";
 
 		rfic@2 {
-			compatible = "qcom,rfic-fsm9900";
+			compatible = "qcom,rfic";
 		};
 	};
 
@@ -1412,7 +1405,7 @@
 		qcom,controller-type = "geni-ssbi-arbiter";
 
 		rfic@3 {
-			compatible = "qcom,rfic-fsm9900";
+			compatible = "qcom,rfic";
 		};
 	};
 
@@ -1423,7 +1416,7 @@
 		qcom,controller-type = "geni-ssbi-arbiter";
 
 		rfic@4 {
-			compatible = "qcom,rfic-fsm9900";
+			compatible = "qcom,rfic";
 		};
 	};
 
@@ -1434,7 +1427,7 @@
 		qcom,controller-type = "geni-ssbi-arbiter";
 
 		rfic@5 {
-			compatible = "qcom,rfic-fsm9900";
+			compatible = "qcom,rfic";
 		};
 	};
 
@@ -1445,7 +1438,7 @@
 		qcom,controller-type = "geni-ssbi-arbiter";
 
 		rfic@6 {
-			compatible = "qcom,rfic-fsm9900";
+			compatible = "qcom,rfic";
 		};
 	};
 
@@ -1456,7 +1449,7 @@
 		qcom,controller-type = "geni-ssbi-arbiter";
 
 		rfic@7 {
-			compatible = "qcom,rfic-fsm9900";
+			compatible = "qcom,rfic";
 		};
 	};
 
@@ -1493,13 +1486,13 @@
 			2 &intc 0 78 0
 			3 &intc 0 79 0
 			4 &intc 0 80 0
-			5 &intc 0 219 0>;
+			5 &msmgpio 5 0x8>;
 		interrupt-names = "emac_core0_irq",
 			"emac_core1_irq",
 			"emac_core2_irq",
 			"emac_core3_irq",
 			"emac_sgmii_irq",
-			"pps_irq";
+			"emac_wol_irq";
 		qcom,emac-gpio-mdc = <&msmgpio 123 0>;
 		qcom,emac-gpio-mdio = <&msmgpio 124 0>;
 		qcom,emac-tstamp-en;
@@ -1529,13 +1522,13 @@
 			2 &intc 0 120 0
 			3 &intc 0 121 0
 			4 &intc 0 122 0
-			5 &intc 0 219 0>;
+			5 &msmgpio 4 0x8>;
 		interrupt-names = "emac_core0_irq",
 			"emac_core1_irq",
 			"emac_core2_irq",
 			"emac_core3_irq",
 			"emac_sgmii_irq",
-			"pps_irq";
+			"emac_wol_irq";
 		qcom,emac-gpio-mdc = <&msmgpio 125 0>;
 		qcom,emac-gpio-mdio = <&msmgpio 126 0>;
 		qcom,emac-tstamp-en;
@@ -1667,8 +1660,6 @@
 		qcom,msm-bus,vectors-KBps =
 				<87 512 0 0>,
 				<87 512 60000 960000>;
-		qcom,max-nominal-sysclk-rate = <100000000>;
-		qcom,bus-clk-rate = <320000000 200000000 100000000>;
 	};
 
 	android_usb@fe8050c8 {
@@ -1952,28 +1943,6 @@
 	chan@77 {
 		label = "pa_therm4";
 		reg = <0x77>;
-		qcom,decimation = <0>;
-		qcom,pre-div-channel-scaling = <0>;
-		qcom,calibration-type = "ratiometric";
-		qcom,scale-function = <11>;
-		qcom,hw-settle-time = <2>;
-		qcom,fast-avg-setup = <0>;
-	};
-
-	chan@e {
-		label = "pa_gnd_ref";
-		reg = <0x0e>;
-		qcom,decimation = <0>;
-		qcom,pre-div-channel-scaling = <0>;
-		qcom,calibration-type = "ratiometric";
-		qcom,scale-function = <11>;
-		qcom,hw-settle-time = <2>;
-		qcom,fast-avg-setup = <0>;
-	};
-
-	chan@f {
-		label = "pa_vdd_ref";
-		reg = <0x0f>;
 		qcom,decimation = <0>;
 		qcom,pre-div-channel-scaling = <0>;
 		qcom,calibration-type = "ratiometric";

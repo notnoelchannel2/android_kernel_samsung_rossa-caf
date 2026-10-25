@@ -89,7 +89,7 @@ static struct adreno_device device_3d0 = {
 	.long_ib_detect = 1,
 	.input_work = __WORK_INITIALIZER(device_3d0.input_work,
 		adreno_input_work),
-	.pwrctrl_flag = BIT(ADRENO_SPTP_PC_CTRL) | BIT(ADRENO_PPD_CTRL),
+	.pwrctrl_flag = BIT(ADRENO_SPTP_PC_CTRL),
 };
 
 /* Ptr to array for the current set of fault detect registers */
@@ -356,7 +356,7 @@ static int adreno_soft_reset(struct kgsl_device *device);
  */
 void _soft_reset(struct adreno_device *adreno_dev)
 {
-	struct adreno_gpudev *gpudev  = ADRENO_GPU_DEVICE(adreno_dev);
+	struct kgsl_device *device = &adreno_dev->dev;
 	unsigned int reg;
 
 	adreno_writereg(adreno_dev, ADRENO_REG_RBBM_SW_RESET_CMD, 1);
@@ -368,9 +368,8 @@ void _soft_reset(struct adreno_device *adreno_dev)
 	adreno_writereg(adreno_dev, ADRENO_REG_RBBM_SW_RESET_CMD, 0);
 
 	/* The SP/TP regulator gets turned off after a soft reset */
-
-	if (gpudev->regulator_enable)
-		gpudev->regulator_enable(adreno_dev);
+	if (device->ftbl->regulator_enable)
+		device->ftbl->regulator_enable(device);
 }
 
 
@@ -511,8 +510,6 @@ adreno_identify_gpu(struct adreno_device *adreno_dev)
 		if (reg_offsets->offset_0 != i && !reg_offsets->offsets[i])
 			reg_offsets->offsets[i] = ADRENO_REG_UNUSED;
 	}
-	if (gpudev->gpudev_init)
-		gpudev->gpudev_init(adreno_dev);
 }
 
 static const struct platform_device_id adreno_id_table[] = {
@@ -1241,35 +1238,6 @@ static int adreno_start(struct kgsl_device *device, int priority)
 	return ret;
 }
 
-/**
- * adreno_vbif_clear_pending_transactions() - Clear transactions in VBIF pipe
- * @device: Pointer to the device whose VBIF pipe is to be cleared
- */
-static void adreno_vbif_clear_pending_transactions(struct kgsl_device *device)
-{
-	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
-	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
-	unsigned int mask = gpudev->vbif_xin_halt_ctrl0_mask;
-	unsigned int val;
-	unsigned long wait_for_vbif;
-
-	adreno_writereg(adreno_dev, ADRENO_REG_VBIF_XIN_HALT_CTRL0, mask);
-	/* wait for the transactions to clear */
-	wait_for_vbif = jiffies + msecs_to_jiffies(100);
-	while (1) {
-		adreno_readreg(adreno_dev,
-			ADRENO_REG_VBIF_XIN_HALT_CTRL1, &val);
-		if ((val & mask) == mask)
-			break;
-		if (time_after(jiffies, wait_for_vbif)) {
-			KGSL_DRV_ERR(device,
-				"Wait limit reached for VBIF XIN Halt\n");
-			break;
-		}
-	}
-	adreno_writereg(adreno_dev, ADRENO_REG_VBIF_XIN_HALT_CTRL0, 0);
-}
-
 static int adreno_stop(struct kgsl_device *device)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
@@ -1322,9 +1290,6 @@ int adreno_reset(struct kgsl_device *device)
 	int ret = -EINVAL;
 	struct kgsl_mmu *mmu = &device->mmu;
 	int i = 0;
-
-	/* clear pending vbif transactions before reset */
-	adreno_vbif_clear_pending_transactions(device);
 
 	/* Try soft reset first, for non mmu fault case only */
 	if (!atomic_read(&mmu->fault)) {
@@ -1533,7 +1498,7 @@ static ssize_t _ft_fast_hang_detect_store(struct device *dev,
 
 	if (tmp != adreno_dev->fast_hang_detect) {
 		if (adreno_dev->fast_hang_detect) {
-			if (!kgsl_active_count_get(&adreno_dev->dev)) {
+			if (kgsl_active_count_get(&adreno_dev->dev)) {
 				adreno_fault_detect_start(adreno_dev);
 				kgsl_active_count_put(&adreno_dev->dev);
 			}
@@ -1842,10 +1807,6 @@ static ssize_t ppd_enable_store(struct kgsl_device *device,
 
 	if ((adreno_dev == NULL) || (device == NULL))
 		return -ENODEV;
-
-	if (!adreno_is_a430v2(adreno_dev) ||
-		!ADRENO_FEATURE(adreno_dev, ADRENO_PPD))
-		return count;
 
 	gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 	ret = kgsl_sysfs_store(buf, &ppd_on);
@@ -2816,16 +2777,6 @@ static void adreno_regulator_disable(struct kgsl_device *device)
 	}
 }
 
-static void adreno_pwrlevel_change_settings(struct kgsl_device *device,
-						bool mask_throttle)
-{
-	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
-	struct adreno_gpudev *gpudev  = ADRENO_GPU_DEVICE(adreno_dev);
-
-	if (gpudev->pwrlevel_change_settings)
-		gpudev->pwrlevel_change_settings(adreno_dev, mask_throttle);
-}
-
 static const struct kgsl_functable adreno_functable = {
 	/* Mandatory functions */
 	.regread = adreno_regread,
@@ -2860,7 +2811,7 @@ static const struct kgsl_functable adreno_functable = {
 	.regulator_enable = adreno_regulator_enable,
 	.is_hw_collapsible = adreno_is_hw_collapsible,
 	.regulator_disable = adreno_regulator_disable,
-	.pwrlevel_change_settings = adreno_pwrlevel_change_settings,
+
 };
 
 static struct platform_driver adreno_platform_driver = {
@@ -2901,9 +2852,6 @@ static int kgsl_busmon_probe(struct platform_device *pdev)
 	struct kgsl_device *device;
 	const struct of_device_id *pdid =
 			of_match_device(busmon_match_table, &pdev->dev);
-
-	if (pdid == NULL)
-		return -ENXIO;
 
 	device = (struct kgsl_device *)pdid->data;
 	device->busmondev = &pdev->dev;

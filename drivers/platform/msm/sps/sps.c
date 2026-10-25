@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1348,11 +1348,7 @@ int sps_connect(struct sps_pipe *h, struct sps_connect *connect)
 		sps_disconnect(h);
 		goto exit_err;
 	}
-	pipe->bam_pipe_event_reg_offset =
-		bam_get_pipe_event_reg_offset(&bam->base, pipe->pipe_index);
-	pipe->bam_pipe_sw_offset_reg_offset =
-		bam_get_pipe_sw_offset_reg_offset(&bam->base, pipe->pipe_index);
-	pipe->write_desc_offset_cached = false;
+
 exit_err:
 	mutex_unlock(&sps->lock);
 
@@ -1579,8 +1575,6 @@ static int sps_check_iovec_flags(u32 flags)
  * Perform a DMA transfer on an SPS connection end point
  *
  */
-static bool _skip_check_error = true;
-
 int sps_transfer(struct sps_pipe *h, struct sps_transfer *transfer)
 {
 	struct sps_pipe *pipe = h;
@@ -1589,8 +1583,7 @@ int sps_transfer(struct sps_pipe *h, struct sps_transfer *transfer)
 	struct sps_iovec *iovec;
 	int i;
 
-	if (_skip_check_error)
-		goto start;
+	SPS_DBG("sps:%s.", __func__);
 
 	if (h == NULL) {
 		SPS_ERR("sps:%s:pipe is NULL.\n", __func__);
@@ -1624,12 +1617,12 @@ int sps_transfer(struct sps_pipe *h, struct sps_transfer *transfer)
 
 		iovec++;
 	}
-start:
+
 	bam = sps_bam_lock(pipe);
 	if (bam == NULL)
 		return SPS_ERROR;
 
-	result = sps_bam_pipe_transfer(bam, pipe, transfer);
+	result = sps_bam_pipe_transfer(bam, pipe->pipe_index, transfer);
 
 	sps_bam_unlock(bam);
 
@@ -1662,7 +1655,7 @@ int sps_transfer_one(struct sps_pipe *h, phys_addr_t addr, u32 size,
 	if (bam == NULL)
 		return SPS_ERROR;
 
-	result = sps_bam_pipe_transfer_one(bam, pipe,
+	result = sps_bam_pipe_transfer_one(bam, pipe->pipe_index,
 				SPS_GET_LOWER_ADDR(addr), size, user,
 				DESC_FLAG_WORD(flags, addr));
 
@@ -1758,7 +1751,7 @@ int sps_get_free_count(struct sps_pipe *h, u32 *count)
 	if (bam == NULL)
 		return SPS_ERROR;
 
-	result = sps_bam_get_free_count(bam, pipe, count);
+	result = sps_bam_get_free_count(bam, pipe->pipe_index, count);
 	sps_bam_unlock(bam);
 
 	return result;
@@ -2012,7 +2005,8 @@ int sps_get_unused_desc_num(struct sps_pipe *h, u32 *desc_num)
 	if (bam == NULL)
 		return SPS_ERROR;
 
-	result = sps_bam_pipe_get_unused_desc_num(bam, pipe, desc_num);
+	result = sps_bam_pipe_get_unused_desc_num(bam, pipe->pipe_index,
+						desc_num);
 
 	sps_bam_unlock(bam);
 
@@ -2345,75 +2339,6 @@ int sps_pipe_reset(unsigned long dev, u32 pipe)
 	return 0;
 }
 EXPORT_SYMBOL(sps_pipe_reset);
-
-/*
- * Disable a BAM pipe
- */
-int sps_pipe_disable(unsigned long dev, u32 pipe)
-{
-	struct sps_bam *bam;
-
-	SPS_DBG("sps:%s.", __func__);
-
-	if (!dev) {
-		SPS_ERR("sps:%s:BAM handle is NULL.\n", __func__);
-		return SPS_ERROR;
-	}
-
-	if (pipe >= BAM_MAX_PIPES) {
-		SPS_ERR("sps:%s:pipe index is invalid.\n", __func__);
-		return SPS_ERROR;
-	}
-
-	bam = sps_h2bam(dev);
-	if (bam == NULL) {
-		SPS_ERR("sps:%s:BAM is not found by handle.\n", __func__);
-		return SPS_ERROR;
-	}
-
-	bam_disable_pipe(bam->base, pipe);
-
-	return 0;
-}
-EXPORT_SYMBOL(sps_pipe_disable);
-
-/*
- * Check pending descriptors in the descriptor FIFO
- * of a pipe
- */
-int sps_pipe_pending_desc(unsigned long dev, u32 pipe, bool *pending)
-{
-
-	struct sps_bam *bam;
-
-	SPS_DBG("sps:%s.", __func__);
-
-	if (!dev) {
-		SPS_ERR("sps:%s:BAM handle is NULL.\n", __func__);
-		return SPS_ERROR;
-	}
-
-	if (pipe >= BAM_MAX_PIPES) {
-		SPS_ERR("sps:%s:pipe index is invalid.\n", __func__);
-		return SPS_ERROR;
-	}
-
-	if (!pending) {
-		SPS_ERR("sps:%s:input flag is NULL.\n", __func__);
-		return SPS_ERROR;
-	}
-
-	bam = sps_h2bam(dev);
-	if (bam == NULL) {
-		SPS_ERR("sps:%s:BAM is not found by handle.\n", __func__);
-		return SPS_ERROR;
-	}
-
-	*pending = sps_bam_pipe_pending_desc(bam, pipe);
-
-	return 0;
-}
-EXPORT_SYMBOL(sps_pipe_pending_desc);
 
 /*
  * Process any pending IRQ of a BAM

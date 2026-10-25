@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -796,8 +796,6 @@ static int subsys_powerup(const struct subsys_desc *subsys)
 
 	if (subsys->stop_ack_irq)
 		INIT_COMPLETION(d->stop_ack);
-
-	d->desc.fw_name = subsys->fw_name;
 	ret = pil_boot(&d->desc);
 
 	return ret;
@@ -845,14 +843,12 @@ static irqreturn_t subsys_wdog_bite_irq_handler(int irq, void *dev_id)
 {
 	struct pil_tz_data *d = subsys_to_data(dev_id);
 
-	if (subsys_get_crash_status(d->subsys))
-		return IRQ_HANDLED;
 	pr_err("Watchdog bite received from %s!\n", d->subsys_desc.name);
-
-	if (d->subsys_desc.system_debug &&
-			!gpio_get_value(d->subsys_desc.err_fatal_gpio))
-		panic("%s: System ramdump requested. Triggering device restart!\n",
-							__func__);
+	if (subsys_get_crash_status(d->subsys)) {
+		pr_err("%s: Ignoring wdog bite IRQ, restart in progress\n",
+							d->subsys_desc.name);
+		return IRQ_HANDLED;
+	}
 	subsys_set_crash_status(d->subsys, true);
 	log_failure_reason(d);
 	subsystem_restart_dev(d->subsys);

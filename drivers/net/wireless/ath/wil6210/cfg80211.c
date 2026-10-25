@@ -728,8 +728,6 @@ static int wil_cfg80211_start_ap(struct wiphy *wiphy,
 		wil_print_bcon_data(bcon);
 	}
 
-	wil_set_recovery_state(wil, fw_recovery_idle);
-
 	mutex_lock(&wil->mutex);
 
 	__wil_down(wil);
@@ -777,8 +775,6 @@ static int wil_cfg80211_stop_ap(struct wiphy *wiphy,
 
 	wil_dbg_misc(wil, "%s()\n", __func__);
 
-	wil_set_recovery_state(wil, fw_recovery_idle);
-
 	mutex_lock(&wil->mutex);
 
 	rc = wmi_pcp_stop(wil);
@@ -797,7 +793,7 @@ static int wil_cfg80211_del_station(struct wiphy *wiphy,
 	struct wil6210_priv *wil = wiphy_to_wil(wiphy);
 
 	mutex_lock(&wil->mutex);
-	wil6210_disconnect(wil, mac, WLAN_REASON_UNSPECIFIED, false);
+	wil6210_disconnect(wil, mac);
 	mutex_unlock(&wil->mutex);
 
 	return 0;

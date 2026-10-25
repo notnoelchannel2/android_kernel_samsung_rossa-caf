@@ -28,11 +28,10 @@ static inline const char *mdss_mdp_pipetype2str(u32 ptype)
 		PIPE_TYPE(VIG),
 		PIPE_TYPE(RGB),
 		PIPE_TYPE(DMA),
-		PIPE_TYPE(CURSOR),
 #undef PIPE_TYPE
 	};
 
-	if (ptype >= ARRAY_SIZE(strings) || !strings[ptype])
+	if (ptype >= ARRAY_SIZE(strings))
 		return "UNKOWN";
 
 	return strings[ptype];
@@ -63,7 +62,7 @@ static inline const char *mdss_mdp_format2str(u32 format)
 #undef FORMAT_NAME
 	};
 
-	if (format >= ARRAY_SIZE(strings) || !strings[format])
+	if (format >= ARRAY_SIZE(strings))
 		return "UNKOWN";
 
 	return strings[format];

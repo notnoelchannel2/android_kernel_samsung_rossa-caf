@@ -21,14 +21,6 @@
 #define MAX_CID                 16
 #define I2C_SEQ_REG_DATA_MAX    256
 #define MSM_V4L2_PIX_FMT_META v4l2_fourcc('M', 'E', 'T', 'A') /* META */
-#define MSM_V4L2_PIX_FMT_SBGGR14 v4l2_fourcc('B', 'G', '1', '4')
-	/* 14  BGBG.. GRGR.. */
-#define MSM_V4L2_PIX_FMT_SGBRG14 v4l2_fourcc('G', 'B', '1', '4')
-	/* 14  GBGB.. RGRG.. */
-#define MSM_V4L2_PIX_FMT_SGRBG14 v4l2_fourcc('B', 'A', '1', '4')
-	/* 14  GRGR.. BGBG.. */
-#define MSM_V4L2_PIX_FMT_SRGGB14 v4l2_fourcc('R', 'G', '1', '4')
-	/* 14  RGRG.. GBGB.. */
 
 #define MAX_ACTUATOR_REG_TBL_SIZE 8
 #define MAX_ACTUATOR_REGION       5
@@ -36,11 +28,11 @@
 #define MAX_ACTUATOR_SCENARIO     8
 #define MAX_ACT_MOD_NAME_SIZE     32
 #define MAX_ACT_NAME_SIZE         32
-#define MAX_ACTUATOR_INIT_SET     120
+#define MAX_ACTUATOR_INIT_SET     12
 #define MAX_I2C_REG_SET           12
 
 #define MAX_NAME_SIZE             32
-#define MAX_LED_TRIGGERS          3
+#define MAX_FLASH_NUM             8
 
 enum msm_sensor_camera_id_t {
 	CAMERA_0,
@@ -54,7 +46,6 @@ enum i2c_freq_mode_t {
 	I2C_STANDARD_MODE,
 	I2C_FAST_MODE,
 	I2C_CUSTOM_MODE,
-	I2C_FAST_PLUS_MODE,
 	I2C_MAX_MODES,
 };
 
@@ -147,10 +138,6 @@ enum msm_actuator_addr_type {
 enum msm_actuator_write_type {
 	MSM_ACTUATOR_WRITE_HW_DAMP,
 	MSM_ACTUATOR_WRITE_DAC,
-	MSM_ACTUATOR_WRITE,
-	MSM_ACTUATOR_WRITE_DIR_REG,
-	MSM_ACTUATOR_POLL,
-	MSM_ACTUATOR_READ_WRITE,
 };
 
 enum msm_actuator_i2c_operation {
@@ -162,7 +149,6 @@ enum actuator_type {
 	ACTUATOR_VCM,
 	ACTUATOR_PIEZO,
 	ACTUATOR_HVCM,
-	ACTUATOR_BIVCM,
 };
 
 enum msm_flash_driver_type {
@@ -209,7 +195,6 @@ struct msm_sensor_init_params {
 struct msm_sensor_id_info_t {
 	uint16_t sensor_id_reg_addr;
 	uint16_t sensor_id;
-	uint16_t sensor_id_mask;
 };
 
 struct msm_camera_sensor_slave_info {
@@ -291,12 +276,7 @@ struct msm_actuator_reg_params_t {
 	uint16_t reg_addr;
 	uint16_t hw_shift;
 	uint16_t data_shift;
-	uint16_t data_type;
-	uint16_t addr_type;
-	uint16_t reg_data;
-	uint16_t delay;
 };
-
 
 struct damping_params_t {
 	uint32_t damping_step;
@@ -310,8 +290,6 @@ struct region_params_t {
 	*/
 	uint16_t step_bound[2];
 	uint16_t code_per_step;
-	/* qvalue for converting float type numbers to integer format */
-	uint32_t qvalue;
 };
 
 struct reg_settings_t {

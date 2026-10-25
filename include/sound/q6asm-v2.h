@@ -350,8 +350,7 @@ int q6asm_media_format_block_pcm_format_support(struct audio_client *ac,
 
 int q6asm_media_format_block_pcm_format_support_v2(struct audio_client *ac,
 				uint32_t rate, uint32_t channels,
-				uint16_t bits_per_sample, int stream_id,
-				bool use_default_chmap, char *channel_map);
+				uint16_t bits_per_sample, int stream_id);
 
 int q6asm_media_format_block_multi_ch_pcm(struct audio_client *ac,
 			uint32_t rate, uint32_t channels,
@@ -400,12 +399,10 @@ int q6asm_set_volume(struct audio_client *ac, int volume);
 /* Send Volume Command */
 int q6asm_set_volume_v2(struct audio_client *ac, int volume, int instance);
 
-/* DTS Eagle Params */
 int q6asm_dts_eagle_set(struct audio_client *ac, int param_id, int size,
-			void *data, struct param_outband *po, int m_id);
-int q6asm_dts_eagle_get(struct audio_client *ac, int param_id, int size,
-			void *data, struct param_outband *po, int m_id);
-
+			void *data);
+int q6asm_dts_eagle_get(struct audio_client *ac, int param_id,
+			int size, void *data);
 /* Set SoftPause Params */
 int q6asm_set_softpause(struct audio_client *ac,
 			struct asm_softpause_params *param);
@@ -454,5 +451,14 @@ int q6asm_send_mtmx_strtr_window(struct audio_client *ac,
 		struct asm_session_mtmx_strtr_param_window_v2_t *window_param,
 		uint32_t param_id);
 
+#ifdef CONFIG_SAMSUNG_AUDIO
+int q6asm_set_sa(struct audio_client *ac,int *param);
+int q6asm_set_vsp(struct audio_client *ac,int *param);
+int q6asm_set_dha(struct audio_client *ac,int *param);
+int q6asm_set_lrsm(struct audio_client *ac,int *param);
+int q6asm_set_sa_ep(struct audio_client *ac,int *param);
+int q6asm_get_sa_ep(struct audio_client *ac);
+int q6asm_set_msp(struct audio_client *ac,int *param);
+#endif /* CONFIG_SAMSUNG_AUDIO */
 
 #endif /* __Q6_ASM_H__ */

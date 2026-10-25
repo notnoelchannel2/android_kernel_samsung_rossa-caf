@@ -82,6 +82,9 @@
 #ifdef CONFIG_PARAVIRT
 #include <asm/paravirt.h>
 #endif
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/sec_debug.h>
+#endif
 
 #include "sched.h"
 #include "../workqueue_internal.h"
@@ -1078,7 +1081,7 @@ static int __init set_sched_enable_power_aware(char *str)
 
 	get_option(&str, &enable_power_aware);
 
-	sysctl_sched_enable_power_aware = !!enable_power_aware;
+	sched_enable_power_aware = !!enable_power_aware;
 
 	return 0;
 }
@@ -1163,8 +1166,6 @@ __read_mostly unsigned int sysctl_sched_window_stats_policy =
 static __read_mostly unsigned int sched_account_wait_time = 1;
 __read_mostly unsigned int sysctl_sched_account_wait_time = 1;
 
-__read_mostly unsigned int sysctl_sched_cpu_high_irqload = (10 * NSEC_PER_MSEC);
-
 #ifdef CONFIG_SCHED_FREQ_INPUT
 
 static __read_mostly unsigned int sched_migration_fixup = 1;
@@ -1226,6 +1227,8 @@ __read_mostly unsigned int sched_ravg_window = 10000000;
 unsigned int __read_mostly sched_disable_window_stats;
 
 static unsigned int sync_cpu;
+static u64 sched_init_jiffy;
+static u64 sched_clock_at_init_jiffy;
 
 #define EXITING_TASK_MARKER	0xdeaddead
 
@@ -1833,35 +1836,13 @@ void sched_account_irqtime(int cpu, struct task_struct *curr,
 				 u64 delta, u64 wallclock)
 {
 	struct rq *rq = cpu_rq(cpu);
-	unsigned long flags, nr_windows;
-	u64 cur_jiffies_ts, now;
+	unsigned long flags;
+
+	if (!is_idle_task(curr))
+		return;
 
 	raw_spin_lock_irqsave(&rq->lock, flags);
-
-	now = sched_clock();
-	delta += (now - wallclock);
-	cur_jiffies_ts = get_jiffies_64();
-
-	if (is_idle_task(curr))
-		update_task_ravg(curr, rq, IRQ_UPDATE, now, delta);
-
-	nr_windows = cur_jiffies_ts - rq->irqload_ts;
-
-	if (nr_windows) {
-		if (nr_windows < 10) {
-			/* Decay CPU's irqload by 3/4 for each window. */
-			rq->avg_irqload *= (3 * nr_windows);
-			rq->avg_irqload = div64_u64(rq->avg_irqload,
-						    4 * nr_windows);
-		} else {
-			rq->avg_irqload = 0;
-		}
-		rq->avg_irqload += rq->cur_irqload;
-		rq->cur_irqload = 0;
-	}
-
-	rq->cur_irqload += delta;
-	rq->irqload_ts = cur_jiffies_ts;
+	update_task_ravg(curr, rq, IRQ_UPDATE, wallclock, delta);
 	raw_spin_unlock_irqrestore(&rq->lock, flags);
 }
 
@@ -1919,17 +1900,23 @@ static inline void mark_task_starting(struct task_struct *p)
 	p->ravg.mark_start = wallclock;
 }
 
+static int update_alignment;
+
 static inline void set_window_start(struct rq *rq)
 {
 	int cpu = cpu_of(rq);
 	struct rq *sync_rq = cpu_rq(sync_cpu);
 
-	if (rq->window_start || !sched_enable_hmp ||
-	    !sched_clock_initialized() || !sched_clock_cpu(cpu))
+	if (cpu == sync_cpu && !update_alignment) {
+		sched_init_jiffy = get_jiffies_64();
+		sched_clock_at_init_jiffy = sched_clock();
+	}
+
+	if (rq->window_start || !sched_enable_hmp)
 		return;
 
 	if (cpu == sync_cpu) {
-		rq->window_start = sched_clock();
+		rq->window_start = sched_clock_at_init_jiffy;
 	} else {
 		raw_spin_unlock(&rq->lock);
 		double_rq_lock(rq, sync_rq);
@@ -2162,29 +2149,20 @@ void sched_set_io_is_busy(int val)
 
 int sched_set_window(u64 window_start, unsigned int window_size)
 {
-	u64 now, cur_jiffies, jiffy_sched_clock;
-	s64 ws;
-	unsigned long flags;
+	u64 ws, now;
 
 	if (sched_use_pelt ||
 		 (window_size * TICK_NSEC <  MIN_SCHED_RAVG_WINDOW))
 			return -EINVAL;
 
 	mutex_lock(&policy_mutex);
+	update_alignment = 1;
 
-	/* Get a consistent view of sched_clock, jiffies, and the time
-	 * since the last jiffy (based on last_jiffies_update). */
-	local_irq_save(flags);
-	cur_jiffies = jiffy_to_sched_clock(&now, &jiffy_sched_clock);
-	local_irq_restore(flags);
-
-	/* translate window_start from jiffies to nanoseconds */
-	ws = (window_start - cur_jiffies); /* jiffy difference */
+	ws = (window_start - sched_init_jiffy); /* jiffy difference */
 	ws *= TICK_NSEC;
-	ws += jiffy_sched_clock;
+	ws += sched_clock_at_init_jiffy;
 
-	/* roll back calculated window start so that it is in
-	 * the past (window stats must have a current window) */
+	now = sched_clock();
 	while (ws > now)
 		ws -= (window_size * TICK_NSEC);
 
@@ -2442,12 +2420,10 @@ static int cpufreq_notifier_policy(struct notifier_block *nb,
 	pre_big_small_task_count_change(cpu_possible_mask);
 	for_each_cpu(i, cpus) {
 		struct rq *rq = cpu_rq(i);
-		u64 max_possible_capacity;
 
 		rq->capacity = compute_capacity(i);
-		max_possible_capacity = div_u64(((u64) rq->capacity) *
-					rq->max_possible_freq, rq->max_freq);
-		rq->max_possible_capacity = (int) max_possible_capacity;
+		rq->max_possible_capacity = rq->capacity *
+				rq->max_possible_freq / rq->max_freq;
 		rq->load_scale_factor = compute_load_scale_factor(i);
 	}
 
@@ -2462,24 +2438,18 @@ static int cpufreq_notifier_trans(struct notifier_block *nb,
 {
 	struct cpufreq_freqs *freq = (struct cpufreq_freqs *)data;
 	unsigned int cpu = freq->cpu, new_freq = freq->new;
+	struct rq *rq = cpu_rq(cpu);
 	unsigned long flags;
-	int i;
 
 	if (val != CPUFREQ_POSTCHANGE)
 		return 0;
 
 	BUG_ON(!new_freq);
 
-	if (cpu_rq(cpu)->cur_freq == new_freq)
-		return 0;
-
-	for_each_cpu(i, &cpu_rq(cpu)->freq_domain_cpumask) {
-		struct rq *rq = cpu_rq(i);
-		raw_spin_lock_irqsave(&rq->lock, flags);
-		update_task_ravg(rq->curr, rq, TASK_UPDATE, sched_clock(), 0);
-		rq->cur_freq = new_freq;
-		raw_spin_unlock_irqrestore(&rq->lock, flags);
-	}
+	raw_spin_lock_irqsave(&rq->lock, flags);
+	update_task_ravg(rq->curr, rq, TASK_UPDATE, sched_clock(), 0);
+	cpu_rq(cpu)->cur_freq = new_freq;
+	raw_spin_unlock_irqrestore(&rq->lock, flags);
 
 	return 0;
 }
@@ -2527,16 +2497,6 @@ static void restore_orig_mark_start(struct task_struct *p, u64 mark_start)
 	p->ravg.mark_start = mark_start;
 }
 
-/*
- * Note down when task started running on a cpu. This information will be handy
- * to avoid "too" frequent task migrations for a running task on account of
- * power.
- */
-static inline void note_run_start(struct task_struct *p, u64 wallclock)
-{
-	p->run_start = wallclock;
-}
-
 #else	/* CONFIG_SCHED_HMP */
 
 static inline void fixup_busy_time(struct task_struct *p, int new_cpu) { }
@@ -2568,8 +2528,6 @@ restore_orig_mark_start(struct task_struct *p, u64 mark_start)
 {
 }
 
-static inline void note_run_start(struct task_struct *p, u64 wallclock) { }
-
 #endif	/* CONFIG_SCHED_HMP */
 
 #ifdef CONFIG_SMP
@@ -2600,8 +2558,6 @@ void set_task_cpu(struct task_struct *p, unsigned int new_cpu)
 #endif
 
 	trace_sched_migrate_task(p, new_cpu, pct_task_load(p));
-
-	note_run_start(p, sched_clock());
 
 	if (task_cpu(p) != new_cpu) {
 		struct task_migration_notifier tmn;
@@ -3009,10 +2965,12 @@ void scheduler_ipi(void)
 		return;
 
 	if (got_boost_kick()) {
+#if defined(CONFIG_ARCH_MSM8939)|| defined (CONFIG_ARCH_MSM8929)
 		struct rq *rq = cpu_rq(cpu);
 
 		if (rq->curr->sched_class == &fair_sched_class)
 			check_for_migration(rq, rq->curr);
+#endif
 		clear_boost_kick(cpu);
 	}
 
@@ -3156,8 +3114,6 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	if (src_cpu != cpu) {
 		wake_flags |= WF_MIGRATED;
 		set_task_cpu(p, cpu);
-	} else {
-		note_run_start(p, wallclock);
 	}
 #endif /* CONFIG_SMP */
 
@@ -3771,6 +3727,13 @@ unsigned long this_cpu_load(void)
 	return this->cpu_load[0];
 }
 
+#ifdef CONFIG_RUNTIME_COMPCACHE
+unsigned long this_cpu_loadx(int i)
+{
+	struct rq *this = this_rq();
+	return this->cpu_load[i];
+}
+#endif /* CONFIG_RUNTIME_COMPCACHE */
 
 /*
  * Global load-average calculations
@@ -4451,8 +4414,10 @@ void scheduler_tick(void)
 	trigger_load_balance(rq, cpu);
 #endif
 	rq_last_tick_reset(rq);
+#if defined(CONFIG_ARCH_MSM8939)|| defined (CONFIG_ARCH_MSM8929)
 	if (curr->sched_class == &fair_sched_class)
 		check_for_migration(rq, curr);
+#endif
 }
 
 #ifdef CONFIG_NO_HZ_FULL
@@ -4739,6 +4704,10 @@ need_resched:
 		 */
 		cpu = smp_processor_id();
 		rq = cpu_rq(cpu);
+#ifdef CONFIG_SEC_DEBUG
+		sec_debug_task_sched_log(cpu, rq->curr);
+#endif
+
 	} else
 		raw_spin_unlock_irq(&rq->lock);
 
@@ -6037,7 +6006,7 @@ static int sched_read_attr(struct sched_attr __user *uattr,
 		attr->size = usize;
 	}
 
-	ret = copy_to_user(uattr, attr, usize);
+	ret = copy_to_user(uattr, attr, attr->size);
 	if (ret)
 		return -EFAULT;
 
@@ -9042,10 +9011,6 @@ void __init sched_init(void)
 		rq->mostly_idle_load = pct_to_real(20);
 		rq->mostly_idle_nr_run = 3;
 		rq->mostly_idle_freq = 0;
-		rq->cur_irqload = 0;
-		rq->avg_irqload = 0;
-		rq->irqload_ts = 0;
-		rq->prefer_idle = 1;
 #ifdef CONFIG_SCHED_FREQ_INPUT
 		rq->old_busy_time = 0;
 		rq->curr_runnable_sum = rq->prev_runnable_sum = 0;
